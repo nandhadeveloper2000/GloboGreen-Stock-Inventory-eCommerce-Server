@@ -119,8 +119,14 @@ function toObjectIdArray(v: any) {
 export async function createShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
-    if (!u?.sub || !u?.role) return res.status(401).json({ success: false, message: "Unauthorized" });
-    if (!isObjectId(u.sub)) return res.status(401).json({ success: false, message: "Invalid user id" });
+
+    if (!u?.sub || !u?.role) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    if (!isObjectId(u.sub)) {
+      return res.status(401).json({ success: false, message: "Invalid user id" });
+    }
 
     const {
       name,
@@ -130,7 +136,7 @@ export async function createShopOwner(req: Request, res: Response) {
       mobile,
       additionalNumber,
       businessTypes,
-      shopControl, // ✅ added
+      shopControl,
       state,
       district,
       taluk,
@@ -140,53 +146,78 @@ export async function createShopOwner(req: Request, res: Response) {
     } = req.body as any;
 
     if (!name || !username || !email || !pin) {
-      return res.status(400).json({ success: false, message: "name, username, email, pin required" });
+      return res.status(400).json({
+        success: false,
+        message: "name, username, email, pin required",
+      });
     }
 
-    // ✅ validate shopControl
     const control = normalizeShopControl(shopControl);
     if (!control) {
       return res.status(400).json({
         success: false,
-        message: "shopControl must be ALL_IN_ONE or INVENTORY_ONLY",
+        message: "shopControl must be ALL_IN_ONE_ECOMMERCE or INVENTORY_ONLY",
       });
     }
 
-    // ✅ duplicate check (field-wise)
+    const nName = normTrim(name);
     const nEmail = normLower(email);
     const nUsername = normLower(username);
-    const nMobile = mobile ? normTrim(mobile) : "";
-    const nAdditional = additionalNumber ? normTrim(additionalNumber) : "";
 
-    const or: any[] = [{ email: nEmail }, { username: nUsername }];
-    if (nMobile) or.push({ mobile: nMobile });
-    if (nAdditional) or.push({ additionalNumber: nAdditional });
+    // optional unique fields must become undefined, not ""
+    const nMobileRaw = normTrim(mobile);
+    const nAdditionalRaw = normTrim(additionalNumber);
 
-    const exists = await ShopOwnerModel.findOne({ $or: or }).select("_id email username mobile additionalNumber");
-    if (exists) {
-      return res
-        .status(409)
-        .json({ success: false, message: "Already exists (email/username/mobile/additionalNumber)" });
+    const nMobile = nMobileRaw || undefined;
+    const nAdditional = nAdditionalRaw || undefined;
+
+    const or: any[] = [
+      { email: nEmail },
+      { username: nUsername },
+    ];
+
+    if (nMobile) {
+      or.push({ mobile: nMobile });
     }
 
-    // createdBy only stores MASTER or MANAGER (as per your schema)
+    if (nAdditional) {
+      or.push({ additionalNumber: nAdditional });
+    }
+
+    const exists = await ShopOwnerModel.findOne({ $or: or }).select(
+      "_id email username mobile additionalNumber"
+    );
+
+    if (exists) {
+      let duplicateField = "email/username/mobile/additionalNumber";
+
+      if (exists.email === nEmail) duplicateField = "email";
+      else if (exists.username === nUsername) duplicateField = "username";
+      else if (nMobile && exists.mobile === nMobile) duplicateField = "mobile";
+      else if (nAdditional && exists.additionalNumber === nAdditional) duplicateField = "additionalNumber";
+
+      return res.status(409).json({
+        success: false,
+        message: `${duplicateField} already exists`,
+      });
+    }
+
     const createdBy =
       u.role === "MASTER_ADMIN" || u.role === "MANAGER"
-        ? buildCreatedBy(u as any)
+        ? buildCreatedBy(u as { sub: string; role: "MASTER_ADMIN" | "MANAGER" })
         : { type: "MANAGER", id: u.sub, role: "MANAGER", ref: "SubAdmin" };
 
-    const doc = await ShopOwnerModel.create({
-      name: normTrim(name),
+    const payload: any = {
+      name: nName,
       username: nUsername,
       email: nEmail,
-      mobile: nMobile,
-      additionalNumber: nAdditional,
       pinHash: await hashPin(normTrim(pin)),
-
-      businessTypes: Array.isArray(businessTypes) ? businessTypes : businessTypes ? [String(businessTypes)] : [],
-
-      shopControl: control, // ✅ saved
-
+      businessTypes: Array.isArray(businessTypes)
+        ? businessTypes
+        : businessTypes
+        ? [String(businessTypes)]
+        : [],
+      shopControl: control,
       address: {
         state: normTrim(state),
         district: normTrim(district),
@@ -195,16 +226,34 @@ export async function createShopOwner(req: Request, res: Response) {
         street: normTrim(street),
         pincode: normTrim(pincode),
       },
-
-      isActive: false, // ✅ must activate by MASTER_ADMIN/MANAGER
+      isActive: false,
       createdBy,
-    });
+    };
 
-    return res.status(201).json({ success: true, data: safe(doc) });
+    if (nMobile) payload.mobile = nMobile;
+    if (nAdditional) payload.additionalNumber = nAdditional;
+
+    const doc = await ShopOwnerModel.create(payload);
+
+    return res.status(201).json({
+      success: true,
+      data: safe(doc),
+    });
   } catch (err: any) {
-    if (err?.code === 11000)
-      return res.status(409).json({ success: false, message: "Duplicate field", error: err?.message });
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    if (err?.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(409).json({
+        success: false,
+        message: `${dupField} already exists`,
+        error: err?.message,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
@@ -237,9 +286,28 @@ export async function getShopOwner(req: Request, res: Response) {
 export async function updateShopOwner(req: Request, res: Response) {
   try {
     const doc = await ShopOwnerModel.findById(req.params.id);
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
-    const { shopIds, shopControl } = req.body as any;
+    const {
+      name,
+      username,
+      email,
+      pin,
+      mobile,
+      additionalNumber,
+      businessTypes,
+      shopIds,
+      shopControl,
+      state,
+      district,
+      taluk,
+      area,
+      street,
+      pincode,
+      isActive,
+    } = req.body as any;
 
     // ✅ validate shopControl if provided
     if (shopControl !== undefined) {
@@ -247,32 +315,178 @@ export async function updateShopOwner(req: Request, res: Response) {
       if (!control) {
         return res.status(400).json({
           success: false,
-          message: "shopControl must be ALL_IN_ONE or INVENTORY_ONLY",
+          message: "shopControl must be ALL_IN_ONE_ECOMMERCE or INVENTORY_ONLY",
         });
       }
       (doc as any).shopControl = control;
     }
 
-    // ✅ shopIds update if provided
+    // ✅ validate shopIds if provided
     if (shopIds !== undefined) {
       const ids = toObjectIdArray(shopIds);
-      if (!ids) return res.status(400).json({ success: false, message: "Invalid shopIds" });
+      if (!ids) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid shopIds",
+        });
+      }
       (doc as any).shopIds = ids;
     }
 
-    // ... keep your duplicate checks + other field updates
+    // ✅ normalize values
+    const nName = name !== undefined ? normTrim(name) : undefined;
+    const nUsername = username !== undefined ? normLower(username) : undefined;
+    const nEmail = email !== undefined ? normLower(email) : undefined;
+
+    const nMobileRaw = mobile !== undefined ? normTrim(mobile) : undefined;
+    const nAdditionalRaw =
+      additionalNumber !== undefined ? normTrim(additionalNumber) : undefined;
+
+    const nMobile = nMobileRaw === undefined ? undefined : nMobileRaw || undefined;
+    const nAdditional =
+      nAdditionalRaw === undefined ? undefined : nAdditionalRaw || undefined;
+
+    // ✅ duplicate check for email
+    if (nEmail && nEmail !== (doc as any).email) {
+      const exists = await ShopOwnerModel.findOne({
+        _id: { $ne: doc._id },
+        email: nEmail,
+      }).select("_id");
+      if (exists) {
+        return res.status(409).json({
+          success: false,
+          message: "email already exists",
+        });
+      }
+      (doc as any).email = nEmail;
+    }
+
+    // ✅ duplicate check for username
+    if (nUsername && nUsername !== (doc as any).username) {
+      const exists = await ShopOwnerModel.findOne({
+        _id: { $ne: doc._id },
+        username: nUsername,
+      }).select("_id");
+      if (exists) {
+        return res.status(409).json({
+          success: false,
+          message: "username already exists",
+        });
+      }
+      (doc as any).username = nUsername;
+    }
+
+    // ✅ duplicate check for mobile
+    if (mobile !== undefined) {
+      if (nMobile) {
+        const exists = await ShopOwnerModel.findOne({
+          _id: { $ne: doc._id },
+          mobile: nMobile,
+        }).select("_id");
+        if (exists) {
+          return res.status(409).json({
+            success: false,
+            message: "mobile already exists",
+          });
+        }
+        (doc as any).mobile = nMobile;
+      } else {
+        // remove field instead of saving ""
+        (doc as any).mobile = undefined;
+      }
+    }
+
+    // ✅ duplicate check for additionalNumber
+    if (additionalNumber !== undefined) {
+      if (nAdditional) {
+        const exists = await ShopOwnerModel.findOne({
+          _id: { $ne: doc._id },
+          additionalNumber: nAdditional,
+        }).select("_id");
+        if (exists) {
+          return res.status(409).json({
+            success: false,
+            message: "additionalNumber already exists",
+          });
+        }
+        (doc as any).additionalNumber = nAdditional;
+      } else {
+        // remove field instead of saving ""
+        (doc as any).additionalNumber = undefined;
+      }
+    }
+
+    // ✅ update normal fields
+    if (nName !== undefined) (doc as any).name = nName;
+
+    if (pin !== undefined && normTrim(pin)) {
+      (doc as any).pinHash = await hashPin(normTrim(pin));
+    }
+
+    if (businessTypes !== undefined) {
+      (doc as any).businessTypes = Array.isArray(businessTypes)
+        ? businessTypes
+        : businessTypes
+        ? [String(businessTypes)]
+        : [];
+    }
+
+    // ✅ update address fields
+    if (!(doc as any).address) {
+      (doc as any).address = {};
+    }
+
+    if (state !== undefined) (doc as any).address.state = normTrim(state);
+    if (district !== undefined) (doc as any).address.district = normTrim(district);
+    if (taluk !== undefined) (doc as any).address.taluk = normTrim(taluk);
+    if (area !== undefined) (doc as any).address.area = normTrim(area);
+    if (street !== undefined) (doc as any).address.street = normTrim(street);
+    if (pincode !== undefined) (doc as any).address.pincode = normTrim(pincode);
+
+    // ✅ optional active status update
+    if (isActive !== undefined) {
+      const active = String(isActive) === "true" || isActive === true;
+      (doc as any).isActive = active;
+
+      if (active) {
+        if (!(doc as any).validFrom) {
+          (doc as any).validFrom = new Date();
+        }
+        if (!(doc as any).validTo) {
+          (doc as any).validTo = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+        }
+      }
+    }
 
     await doc.save();
 
     const populated = await ShopOwnerModel.findById(doc._id)
-      .populate({ path: "shopIds", select: "name isActive address frontImageUrl createdAt" })
+      .populate({
+        path: "shopIds",
+        select: "name isActive address frontImageUrl createdAt",
+      })
       .lean();
 
-    return res.json({ success: true, data: safe(populated) });
+    return res.json({
+      success: true,
+      message: "Shop owner updated successfully",
+      data: safe(populated),
+    });
   } catch (err: any) {
-    if (err?.code === 11000)
-      return res.status(409).json({ success: false, message: "Duplicate field", error: err?.message });
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    if (err?.code === 11000) {
+      const field = Object.keys(err?.keyPattern || {})[0] || "field";
+      return res.status(409).json({
+        success: false,
+        message: `${field} already exists`,
+        error: err?.message,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 

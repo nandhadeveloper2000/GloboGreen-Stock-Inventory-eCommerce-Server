@@ -1,52 +1,31 @@
-import { Schema, model } from "mongoose";
-import { DocSchema } from "./shared/doc.schema";
-
-const AddressSchema = new Schema(
-  {
-    state: { type: String, default: "" },
-    district: { type: String, default: "" },
-    taluk: { type: String, default: "" },
-    area: { type: String, default: "" },
-    street: { type: String, default: "" },
-    pincode: { type: String, default: "" },
-  },
-  { _id: false }
-);
-
-const CreatedBySchema = new Schema(
-  {
-    type: { type: String, enum: ["MASTER", "MANAGER"], required: true },
-    id: { type: Schema.Types.ObjectId, required: true, refPath: "createdBy.ref" },
-    role: { type: String, enum: ["MASTER_ADMIN", "MANAGER"], required: true },
-    ref: { type: String, enum: ["Master", "SubAdmin"], required: true },
-  },
-  { _id: false }
-);
+import mongoose, { Schema, Document } from "mongoose";
 
 const ShopOwnerSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
-    username: { type: String, required: true, trim: true, lowercase: true, unique: true },
-    email: { type: String, required: true, trim: true, lowercase: true, unique: true },
+    username: { type: String, required: true, lowercase: true, trim: true, unique: true },
+    email: { type: String, required: true, lowercase: true, trim: true, unique: true },
 
-    mobile: { type: String, default: "", unique: true, sparse: true },
-    additionalNumber: { type: String, default: "", unique: true, sparse: true },
+    mobile: {
+      type: String,
+      trim: true,
+      unique: true,
+      sparse: true,
+      default: undefined,
+    },
 
-    avatarUrl: { type: String, default: "" },
-    avatarPublicId: { type: String, default: "" },
+    additionalNumber: {
+      type: String,
+      trim: true,
+      unique: true,
+      sparse: true,
+      default: undefined,
+    },
 
-    // ✅ auth
     pinHash: { type: String, required: true, select: false },
-    refreshTokenHash: { type: String, default: "", select: false },
+    refreshTokenHash: { type: String, select: false },
 
-    role: { type: String, enum: ["SHOP_OWNER"], default: "SHOP_OWNER" },
-    verifyEmail: { type: Boolean, default: false },
-
-    address: { type: AddressSchema, default: () => ({}) },
-
-    // ✅ one or multi shops
-    shopIds: { type: [Schema.Types.ObjectId], ref: "Shop", default: [] },
-    businessTypes: { type: [String], default: [] },
+    businessTypes: [{ type: String }],
 
     shopControl: {
       type: String,
@@ -55,18 +34,59 @@ const ShopOwnerSchema = new Schema(
       default: "INVENTORY_ONLY",
     },
 
-    // ✅ DOCUMENTS (PDF/JPEG/PNG/WEBP)
-    idProof: { type: DocSchema, default: () => ({}) },
-    gstCertificate: { type: DocSchema, default: () => ({}) },
-    udyamCertificate: { type: DocSchema, default: () => ({}) },
+    address: {
+      state: { type: String, trim: true, default: "" },
+      district: { type: String, trim: true, default: "" },
+      taluk: { type: String, trim: true, default: "" },
+      area: { type: String, trim: true, default: "" },
+      street: { type: String, trim: true, default: "" },
+      pincode: { type: String, trim: true, default: "" },
+    },
 
     isActive: { type: Boolean, default: false },
     validFrom: { type: Date },
     validTo: { type: Date },
 
-    createdBy: { type: CreatedBySchema, required: true },
+    createdBy: {
+      type: {
+        type: String,
+        enum: ["MASTER", "MANAGER"],
+      },
+      id: { type: Schema.Types.ObjectId, required: true, refPath: "createdBy.ref" },
+      role: { type: String, enum: ["MASTER_ADMIN", "MANAGER"], required: true },
+      ref: { type: String, enum: ["Master", "SubAdmin"], required: true },
+    },
+
+    shopIds: [{ type: Schema.Types.ObjectId, ref: "Shop" }],
+
+    avatarUrl: { type: String, default: "" },
+    avatarPublicId: { type: String, default: "" },
+
+    idProof: {
+      url: { type: String, default: "" },
+      publicId: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      fileName: { type: String, default: "" },
+      bytes: { type: Number, default: 0 },
+    },
+
+    gstCertificate: {
+      url: { type: String, default: "" },
+      publicId: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      fileName: { type: String, default: "" },
+      bytes: { type: Number, default: 0 },
+    },
+
+    udyamCertificate: {
+      url: { type: String, default: "" },
+      publicId: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      fileName: { type: String, default: "" },
+      bytes: { type: Number, default: 0 },
+    },
   },
   { timestamps: true }
 );
 
-export const ShopOwnerModel = model("ShopOwner", ShopOwnerSchema);
+export const ShopOwnerModel = mongoose.model("ShopOwner", ShopOwnerSchema);
