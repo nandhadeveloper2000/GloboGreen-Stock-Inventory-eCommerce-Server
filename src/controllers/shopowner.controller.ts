@@ -56,7 +56,7 @@ function uploadToCloud(file: Express.Multer.File, folder: string) {
   });
 }
 
-/** ✅ DOC upload (PDF/JPEG/PNG/WEBP) - NO width/height crop */
+/** DOC upload (PDF/JPEG/PNG/WEBP) */
 function uploadDocument(file: Express.Multer.File, folder: string) {
   const isImage = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
   const isPdf = file.mimetype === "application/pdf";
@@ -145,16 +145,51 @@ function toObjectIdArray(v: any) {
   return ids.map((id) => new mongoose.Types.ObjectId(id));
 }
 
-/** ✅ access filter for admin-side shop owner visibility */
+function addOneYear(from = new Date()) {
+  const d = new Date(from);
+  d.setFullYear(d.getFullYear() + 1);
+  return d;
+}
+
+function isExpired(validTo?: Date | string | null) {
+  if (!validTo) return false;
+  return new Date(validTo).getTime() <= Date.now();
+}
+
+async function deactivateExpiredShopOwners() {
+  await ShopOwnerModel.updateMany(
+    {
+      isActive: true,
+      validTo: { $ne: null, $lte: new Date() },
+    },
+    {
+      $set: { isActive: false },
+    }
+  );
+}
+
+async function markExpiredIfNeeded(doc: any) {
+  if (!doc) return doc;
+
+  if (doc.isActive && isExpired(doc.validTo)) {
+    await ShopOwnerModel.updateOne(
+      { _id: doc._id },
+      { $set: { isActive: false } }
+    );
+    doc.isActive = false;
+  }
+
+  return doc;
+}
+
+/** access filter for admin-side shop owner visibility */
 function buildShopOwnerAccessFilter(user?: JwtUser) {
   if (!user?.role) return null;
 
-  // MASTER_ADMIN can access all
   if (user.role === "MASTER_ADMIN") {
     return {};
   }
 
-  // MANAGER / SUPERVISOR / STAFF -> only manager-created SubAdmin records
   if (
     user.role === "MANAGER" ||
     user.role === "SUPERVISOR" ||
@@ -169,7 +204,7 @@ function buildShopOwnerAccessFilter(user?: JwtUser) {
   return null;
 }
 
-/** ✅ CREATE */
+/** CREATE */
 export async function createShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -277,6 +312,8 @@ export async function createShopOwner(req: Request, res: Response) {
         pincode: normTrim(pincode),
       },
       isActive: false,
+      validFrom: null,
+      validTo: null,
       createdBy,
     };
 
@@ -307,7 +344,7 @@ export async function createShopOwner(req: Request, res: Response) {
   }
 }
 
-/** ✅ LIST */
+/** LIST */
 export async function listShopOwners(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -316,6 +353,8 @@ export async function listShopOwners(req: Request, res: Response) {
     if (accessFilter === null) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
+
+    await deactivateExpiredShopOwners();
 
     const items = await ShopOwnerModel.find(accessFilter).sort({ createdAt: -1 });
 
@@ -329,7 +368,7 @@ export async function listShopOwners(req: Request, res: Response) {
   }
 }
 
-/** ✅ GET ONE */
+/** GET ONE */
 export async function getShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -344,7 +383,7 @@ export async function getShopOwner(req: Request, res: Response) {
         ? { _id: req.params.id }
         : { _id: req.params.id, ...accessFilter };
 
-    const doc = await ShopOwnerModel.findOne(query)
+    let doc = await ShopOwnerModel.findOne(query)
       .populate({
         path: "shopIds",
         select: "name isActive shopAddress frontImageUrl createdAt",
@@ -354,6 +393,8 @@ export async function getShopOwner(req: Request, res: Response) {
     if (!doc) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
+
+    doc = await markExpiredIfNeeded(doc);
 
     return res.json({ success: true, data: safe(doc) });
   } catch (err: any) {
@@ -365,7 +406,7 @@ export async function getShopOwner(req: Request, res: Response) {
   }
 }
 
-/** ✅ UPDATE */
+/** UPDATE */
 export async function updateShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -537,17 +578,13 @@ export async function updateShopOwner(req: Request, res: Response) {
 
     if (isActive !== undefined) {
       const active = String(isActive) === "true" || isActive === true;
-      (doc as any).isActive = active;
 
       if (active) {
-        if (!(doc as any).validFrom) {
-          (doc as any).validFrom = new Date();
-        }
-        if (!(doc as any).validTo) {
-          (doc as any).validTo = new Date(
-            Date.now() + 365 * 24 * 60 * 60 * 1000
-          );
-        }
+        (doc as any).isActive = true;
+        (doc as any).validFrom = new Date();
+        (doc as any).validTo = addOneYear((doc as any).validFrom);
+      } else {
+        (doc as any).isActive = false;
       }
     }
 
@@ -583,7 +620,7 @@ export async function updateShopOwner(req: Request, res: Response) {
   }
 }
 
-/** ✅ DELETE */
+/** DELETE */
 export async function deleteShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -615,7 +652,7 @@ export async function deleteShopOwner(req: Request, res: Response) {
   }
 }
 
-/** ✅ ACTIVATE/DEACTIVATE */
+/** ACTIVATE / DEACTIVATE */
 export async function toggleShopOwnerActive(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -635,22 +672,25 @@ export async function toggleShopOwnerActive(req: Request, res: Response) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
-    const isActive =
+    const active =
       String((req.body as any).isActive) === "true" ||
       (req.body as any).isActive === true;
 
-    (doc as any).isActive = isActive;
-
-    if (isActive) {
+    if (active) {
+      (doc as any).isActive = true;
       (doc as any).validFrom = new Date();
-      (doc as any).validTo = new Date(
-        Date.now() + 365 * 24 * 60 * 60 * 1000
-      );
+      (doc as any).validTo = addOneYear((doc as any).validFrom);
+    } else {
+      (doc as any).isActive = false;
     }
 
     await doc.save();
 
-    return res.json({ success: true, data: safe(doc) });
+    return res.json({
+      success: true,
+      message: active ? "Shop owner activated" : "Shop owner deactivated",
+      data: safe(doc),
+    });
   } catch (err: any) {
     return res.status(500).json({
       success: false,
@@ -660,7 +700,7 @@ export async function toggleShopOwnerActive(req: Request, res: Response) {
   }
 }
 
-/** ✅ LOGIN */
+/** LOGIN */
 export async function shopOwnerLogin(req: Request, res: Response) {
   try {
     const { login, pin } = req.body as any;
@@ -685,6 +725,16 @@ export async function shopOwnerLogin(req: Request, res: Response) {
       return res
         .status(403)
         .json({ success: false, message: "Account not activated" });
+    }
+
+    if (isExpired((doc as any).validTo)) {
+      (doc as any).isActive = false;
+      await doc.save();
+
+      return res.status(403).json({
+        success: false,
+        message: "Account expired. Contact admin.",
+      });
     }
 
     const ok = await bcrypt.compare(normTrim(pin), (doc as any).pinHash);
@@ -713,7 +763,7 @@ export async function shopOwnerLogin(req: Request, res: Response) {
   }
 }
 
-/** ✅ REFRESH */
+/** REFRESH */
 export async function shopOwnerRefresh(req: Request, res: Response) {
   try {
     const { refreshToken } = req.body as any;
@@ -734,6 +784,16 @@ export async function shopOwnerRefresh(req: Request, res: Response) {
       return res.status(401).json({ success: false, message: "Session expired" });
     }
 
+    if (isExpired((doc as any).validTo)) {
+      (doc as any).isActive = false;
+      await doc.save();
+
+      return res.status(401).json({
+        success: false,
+        message: "Account expired. Contact admin.",
+      });
+    }
+
     const match = await bcrypt.compare(refreshToken, (doc as any).refreshTokenHash);
     if (!match) {
       return res.status(401).json({ success: false, message: "Session expired" });
@@ -749,7 +809,7 @@ export async function shopOwnerRefresh(req: Request, res: Response) {
   }
 }
 
-/** ✅ LOGOUT */
+/** LOGOUT */
 export async function shopOwnerLogout(req: Request, res: Response) {
   const u = (req as any).user as { sub?: string; role?: string };
 
@@ -765,6 +825,7 @@ export async function shopOwnerLogout(req: Request, res: Response) {
   return res.json({ success: true, message: "Logged out" });
 }
 
+/** ME */
 export async function getShopOwnerMe(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -777,7 +838,7 @@ export async function getShopOwnerMe(req: Request, res: Response) {
       return res.status(401).json({ success: false, message: "Invalid user id" });
     }
 
-    const doc = await ShopOwnerModel.findById(u.sub)
+    let doc = await ShopOwnerModel.findById(u.sub)
       .populate({
         path: "shopIds",
         select: "name isActive address frontImageUrl createdAt",
@@ -787,6 +848,8 @@ export async function getShopOwnerMe(req: Request, res: Response) {
     if (!doc) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
+
+    doc = await markExpiredIfNeeded(doc);
 
     return res.json({ success: true, data: safe(doc) });
   } catch (err: any) {
@@ -798,6 +861,7 @@ export async function getShopOwnerMe(req: Request, res: Response) {
   }
 }
 
+/** SELF AVATAR UPLOAD */
 export async function shopOwnerAvatarUpload(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -844,6 +908,7 @@ export async function shopOwnerAvatarUpload(req: Request, res: Response) {
   }
 }
 
+/** SELF AVATAR REMOVE */
 export async function shopOwnerAvatarRemove(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -883,6 +948,7 @@ export async function shopOwnerAvatarRemove(req: Request, res: Response) {
   }
 }
 
+/** ADMIN AVATAR UPLOAD */
 export async function masterShopOwnerAvatarUpload(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -936,6 +1002,7 @@ export async function masterShopOwnerAvatarUpload(req: Request, res: Response) {
   }
 }
 
+/** ADMIN AVATAR REMOVE */
 export async function masterShopOwnerAvatarRemove(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -982,7 +1049,7 @@ export async function masterShopOwnerAvatarRemove(req: Request, res: Response) {
   }
 }
 
-/** ✅ ADMIN DOCS UPLOAD */
+/** ADMIN DOCS UPLOAD */
 export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1071,7 +1138,7 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
   }
 }
 
-/** ✅ ADMIN DOC REMOVE */
+/** ADMIN DOC REMOVE */
 export async function masterShopOwnerDocsRemove(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
