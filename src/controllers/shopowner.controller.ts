@@ -4,7 +4,11 @@ import bcrypt from "bcrypt";
 import mongoose from "mongoose";
 import { ShopOwnerModel } from "../models/shopowner.model";
 import { hashPin } from "../utils/pin";
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../utils/jwt";
+import {
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
+} from "../utils/jwt";
 import cloudinary from "../config/cloudinary";
 import streamifier from "streamifier";
 
@@ -21,6 +25,7 @@ function safe(doc: any) {
 function isObjectId(id: unknown): id is string {
   return typeof id === "string" && mongoose.Types.ObjectId.isValid(id);
 }
+
 async function cloudinaryDelete(publicId?: string) {
   const pid = String(publicId || "").trim();
   if (!pid) return;
@@ -37,7 +42,9 @@ function uploadToCloud(file: Express.Multer.File, folder: string) {
       {
         folder,
         resource_type: "image",
-        transformation: [{ width: 512, height: 512, crop: "fill", gravity: "face" }],
+        transformation: [
+          { width: 512, height: 512, crop: "fill", gravity: "face" },
+        ],
       },
       (error, result) => {
         if (error || !result) return reject(error);
@@ -48,11 +55,15 @@ function uploadToCloud(file: Express.Multer.File, folder: string) {
     streamifier.createReadStream(file.buffer).pipe(stream);
   });
 }
+
 /** ✅ DOC upload (PDF/JPEG/PNG/WEBP) - NO width/height crop */
 function uploadDocument(file: Express.Multer.File, folder: string) {
   const isImage = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
   const isPdf = file.mimetype === "application/pdf";
-  if (!isImage && !isPdf) throw new Error("Only PDF/JPEG/PNG/WEBP allowed");
+
+  if (!isImage && !isPdf) {
+    throw new Error("Only PDF/JPEG/PNG/WEBP allowed");
+  }
 
   return new Promise<{
     url: string;
@@ -65,11 +76,13 @@ function uploadDocument(file: Express.Multer.File, folder: string) {
       {
         folder,
         resource_type: "auto",
-        // ✅ Optional safety cap for images only (keeps aspect ratio)
-        transformation: isImage ? [{ width: 2000, height: 2000, crop: "limit" }] : undefined,
+        transformation: isImage
+          ? [{ width: 2000, height: 2000, crop: "limit" }]
+          : undefined,
       },
       (error, result) => {
         if (error || !result) return reject(error);
+
         resolve({
           url: result.secure_url,
           publicId: result.public_id,
@@ -83,6 +96,7 @@ function uploadDocument(file: Express.Multer.File, folder: string) {
     streamifier.createReadStream(file.buffer).pipe(stream);
   });
 }
+
 const CLOUD_FOLDER_SHOPOWNER_AVATAR = "Shop Stack/shopowners";
 const CLOUD_FOLDER_SHOPOWNER_DOCS = "Shop Stack/shopowners/docs";
 
@@ -95,8 +109,21 @@ function normTrim(v: any) {
 }
 
 function buildCreatedBy(u: { sub: string; role: "MASTER_ADMIN" | "MANAGER" }) {
-  if (u.role === "MASTER_ADMIN") return { type: "MASTER", id: u.sub, role: u.role, ref: "Master" };
-  return { type: "MANAGER", id: u.sub, role: u.role, ref: "SubAdmin" };
+  if (u.role === "MASTER_ADMIN") {
+    return {
+      type: "MASTER",
+      id: u.sub,
+      role: u.role,
+      ref: "Master",
+    };
+  }
+
+  return {
+    type: "MANAGER",
+    id: u.sub,
+    role: u.role,
+    ref: "SubAdmin",
+  };
 }
 
 function normalizeShopControl(v: any) {
@@ -107,15 +134,42 @@ function normalizeShopControl(v: any) {
 
 function toObjectIdArray(v: any) {
   if (v === undefined) return undefined;
+
   const arr = Array.isArray(v) ? v : [v];
   const ids = arr.map((x) => String(x).trim()).filter(Boolean);
 
   for (const id of ids) {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
   }
+
   return ids.map((id) => new mongoose.Types.ObjectId(id));
 }
-/** ✅ CREATE (MASTER_ADMIN | MANAGER | SUPERVISOR | STAFF) */
+
+/** ✅ access filter for admin-side shop owner visibility */
+function buildShopOwnerAccessFilter(user?: JwtUser) {
+  if (!user?.role) return null;
+
+  // MASTER_ADMIN can access all
+  if (user.role === "MASTER_ADMIN") {
+    return {};
+  }
+
+  // MANAGER / SUPERVISOR / STAFF -> only manager-created SubAdmin records
+  if (
+    user.role === "MANAGER" ||
+    user.role === "SUPERVISOR" ||
+    user.role === "STAFF"
+  ) {
+    return {
+      "createdBy.role": "MANAGER",
+      "createdBy.ref": "SubAdmin",
+    };
+  }
+
+  return null;
+}
+
+/** ✅ CREATE */
 export async function createShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -164,25 +218,16 @@ export async function createShopOwner(req: Request, res: Response) {
     const nEmail = normLower(email);
     const nUsername = normLower(username);
 
-    // optional unique fields must become undefined, not ""
     const nMobileRaw = normTrim(mobile);
     const nAdditionalRaw = normTrim(additionalNumber);
 
     const nMobile = nMobileRaw || undefined;
     const nAdditional = nAdditionalRaw || undefined;
 
-    const or: any[] = [
-      { email: nEmail },
-      { username: nUsername },
-    ];
+    const or: any[] = [{ email: nEmail }, { username: nUsername }];
 
-    if (nMobile) {
-      or.push({ mobile: nMobile });
-    }
-
-    if (nAdditional) {
-      or.push({ additionalNumber: nAdditional });
-    }
+    if (nMobile) or.push({ mobile: nMobile });
+    if (nAdditional) or.push({ additionalNumber: nAdditional });
 
     const exists = await ShopOwnerModel.findOne({ $or: or }).select(
       "_id email username mobile additionalNumber"
@@ -191,10 +236,15 @@ export async function createShopOwner(req: Request, res: Response) {
     if (exists) {
       let duplicateField = "email/username/mobile/additionalNumber";
 
-      if (exists.email === nEmail) duplicateField = "email";
-      else if (exists.username === nUsername) duplicateField = "username";
-      else if (nMobile && exists.mobile === nMobile) duplicateField = "mobile";
-      else if (nAdditional && exists.additionalNumber === nAdditional) duplicateField = "additionalNumber";
+      if ((exists as any).email === nEmail) duplicateField = "email";
+      else if ((exists as any).username === nUsername) duplicateField = "username";
+      else if (nMobile && (exists as any).mobile === nMobile) duplicateField = "mobile";
+      else if (
+        nAdditional &&
+        (exists as any).additionalNumber === nAdditional
+      ) {
+        duplicateField = "additionalNumber";
+      }
 
       return res.status(409).json({
         success: false,
@@ -257,35 +307,80 @@ export async function createShopOwner(req: Request, res: Response) {
   }
 }
 
-/** ✅ LIST (MASTER_ADMIN, MANAGER) */
+/** ✅ LIST */
 export async function listShopOwners(req: Request, res: Response) {
-  const items = await ShopOwnerModel.find().sort({ createdAt: -1 });
-  return res.json({ success: true, data: items.map(safe) });
+  try {
+    const u = (req as any).user as JwtUser;
+    const accessFilter = buildShopOwnerAccessFilter(u);
+
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const items = await ShopOwnerModel.find(accessFilter).sort({ createdAt: -1 });
+
+    return res.json({ success: true, data: items.map(safe) });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
 }
 
-/** ✅ GET ONE (MASTER_ADMIN, MANAGER) — include shops */
-// ✅ GET ONE (ADMIN) — include shops
+/** ✅ GET ONE */
 export async function getShopOwner(req: Request, res: Response) {
   try {
-    const doc = await ShopOwnerModel.findById(req.params.id)
+    const u = (req as any).user as JwtUser;
+    const accessFilter = buildShopOwnerAccessFilter(u);
+
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const query =
+      Object.keys(accessFilter).length === 0
+        ? { _id: req.params.id }
+        : { _id: req.params.id, ...accessFilter };
+
+    const doc = await ShopOwnerModel.findOne(query)
       .populate({
-        path: "shopIds", // ✅ FIX
+        path: "shopIds",
         select: "name isActive shopAddress frontImageUrl createdAt",
       })
       .lean();
 
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
     return res.json({ success: true, data: safe(doc) });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
-/** ✅ UPDATE (MASTER_ADMIN, MANAGER) — include shops update + populate */
-// ✅ UPDATE (ADMIN) — include shopIds update + populate
+
+/** ✅ UPDATE */
 export async function updateShopOwner(req: Request, res: Response) {
   try {
-    const doc = await ShopOwnerModel.findById(req.params.id);
+    const u = (req as any).user as JwtUser;
+    const accessFilter = buildShopOwnerAccessFilter(u);
+
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const findQuery =
+      Object.keys(accessFilter).length === 0
+        ? { _id: req.params.id }
+        : { _id: req.params.id, ...accessFilter };
+
+    const doc = await ShopOwnerModel.findOne(findQuery);
     if (!doc) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
@@ -309,7 +404,6 @@ export async function updateShopOwner(req: Request, res: Response) {
       isActive,
     } = req.body as any;
 
-    // ✅ validate shopControl if provided
     if (shopControl !== undefined) {
       const control = normalizeShopControl(shopControl);
       if (!control) {
@@ -321,7 +415,6 @@ export async function updateShopOwner(req: Request, res: Response) {
       (doc as any).shopControl = control;
     }
 
-    // ✅ validate shopIds if provided
     if (shopIds !== undefined) {
       const ids = toObjectIdArray(shopIds);
       if (!ids) {
@@ -333,7 +426,6 @@ export async function updateShopOwner(req: Request, res: Response) {
       (doc as any).shopIds = ids;
     }
 
-    // ✅ normalize values
     const nName = name !== undefined ? normTrim(name) : undefined;
     const nUsername = username !== undefined ? normLower(username) : undefined;
     const nEmail = email !== undefined ? normLower(email) : undefined;
@@ -346,77 +438,78 @@ export async function updateShopOwner(req: Request, res: Response) {
     const nAdditional =
       nAdditionalRaw === undefined ? undefined : nAdditionalRaw || undefined;
 
-    // ✅ duplicate check for email
     if (nEmail && nEmail !== (doc as any).email) {
       const exists = await ShopOwnerModel.findOne({
         _id: { $ne: doc._id },
         email: nEmail,
       }).select("_id");
+
       if (exists) {
         return res.status(409).json({
           success: false,
           message: "email already exists",
         });
       }
+
       (doc as any).email = nEmail;
     }
 
-    // ✅ duplicate check for username
     if (nUsername && nUsername !== (doc as any).username) {
       const exists = await ShopOwnerModel.findOne({
         _id: { $ne: doc._id },
         username: nUsername,
       }).select("_id");
+
       if (exists) {
         return res.status(409).json({
           success: false,
           message: "username already exists",
         });
       }
+
       (doc as any).username = nUsername;
     }
 
-    // ✅ duplicate check for mobile
     if (mobile !== undefined) {
       if (nMobile) {
         const exists = await ShopOwnerModel.findOne({
           _id: { $ne: doc._id },
           mobile: nMobile,
         }).select("_id");
+
         if (exists) {
           return res.status(409).json({
             success: false,
             message: "mobile already exists",
           });
         }
+
         (doc as any).mobile = nMobile;
       } else {
-        // remove field instead of saving ""
         (doc as any).mobile = undefined;
       }
     }
 
-    // ✅ duplicate check for additionalNumber
     if (additionalNumber !== undefined) {
       if (nAdditional) {
         const exists = await ShopOwnerModel.findOne({
           _id: { $ne: doc._id },
           additionalNumber: nAdditional,
         }).select("_id");
+
         if (exists) {
           return res.status(409).json({
             success: false,
             message: "additionalNumber already exists",
           });
         }
+
         (doc as any).additionalNumber = nAdditional;
       } else {
-        // remove field instead of saving ""
         (doc as any).additionalNumber = undefined;
       }
     }
 
-    // ✅ update normal fields
     if (nName !== undefined) (doc as any).name = nName;
 
     if (pin !== undefined && normTrim(pin)) {
@@ -431,7 +524,6 @@ export async function updateShopOwner(req: Request, res: Response) {
         : [];
     }
 
-    // ✅ update address fields
     if (!(doc as any).address) {
       (doc as any).address = {};
     }
@@ -443,7 +535,6 @@ export async function updateShopOwner(req: Request, res: Response) {
     if (street !== undefined) (doc as any).address.street = normTrim(street);
     if (pincode !== undefined) (doc as any).address.pincode = normTrim(pincode);
 
-    // ✅ optional active status update
     if (isActive !== undefined) {
       const active = String(isActive) === "true" || isActive === true;
       (doc as any).isActive = active;
@@ -453,7 +544,9 @@ export async function updateShopOwner(req: Request, res: Response) {
           (doc as any).validFrom = new Date();
         }
         if (!(doc as any).validTo) {
-          (doc as any).validTo = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+          (doc as any).validTo = new Date(
+            Date.now() + 365 * 24 * 60 * 60 * 1000
+          );
         }
       }
     }
@@ -490,37 +583,93 @@ export async function updateShopOwner(req: Request, res: Response) {
   }
 }
 
-/** ✅ DELETE (MASTER_ADMIN, MANAGER) */
+/** ✅ DELETE */
 export async function deleteShopOwner(req: Request, res: Response) {
-  const doc = await ShopOwnerModel.findById(req.params.id);
-  if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+  try {
+    const u = (req as any).user as JwtUser;
+    const accessFilter = buildShopOwnerAccessFilter(u);
 
-  await doc.deleteOne();
-  return res.json({ success: true, message: "Deleted" });
-}
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
 
-/** ✅ ACTIVATE/DEACTIVATE (ONLY MASTER_ADMIN, MANAGER) */
-export async function toggleShopOwnerActive(req: Request, res: Response) {
-  const doc = await ShopOwnerModel.findById(req.params.id);
-  if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    const findQuery =
+      Object.keys(accessFilter).length === 0
+        ? { _id: req.params.id }
+        : { _id: req.params.id, ...accessFilter };
 
-  const isActive = String((req.body as any).isActive) === "true" || (req.body as any).isActive === true;
-  (doc as any).isActive = isActive;
+    const doc = await ShopOwnerModel.findOne(findQuery);
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
-  if (isActive) {
-    (doc as any).validFrom = new Date();
-    (doc as any).validTo = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    await doc.deleteOne();
+
+    return res.json({ success: true, message: "Deleted" });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
-
-  await doc.save();
-  return res.json({ success: true, data: safe(doc) });
 }
 
-/** ✅ LOGIN (SHOP_OWNER only, requires isActive=true) */
+/** ✅ ACTIVATE/DEACTIVATE */
+export async function toggleShopOwnerActive(req: Request, res: Response) {
+  try {
+    const u = (req as any).user as JwtUser;
+    const accessFilter = buildShopOwnerAccessFilter(u);
+
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const findQuery =
+      Object.keys(accessFilter).length === 0
+        ? { _id: req.params.id }
+        : { _id: req.params.id, ...accessFilter };
+
+    const doc = await ShopOwnerModel.findOne(findQuery);
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+
+    const isActive =
+      String((req.body as any).isActive) === "true" ||
+      (req.body as any).isActive === true;
+
+    (doc as any).isActive = isActive;
+
+    if (isActive) {
+      (doc as any).validFrom = new Date();
+      (doc as any).validTo = new Date(
+        Date.now() + 365 * 24 * 60 * 60 * 1000
+      );
+    }
+
+    await doc.save();
+
+    return res.json({ success: true, data: safe(doc) });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/** ✅ LOGIN */
 export async function shopOwnerLogin(req: Request, res: Response) {
   try {
     const { login, pin } = req.body as any;
-    if (!login || !pin) return res.status(400).json({ success: false, message: "login and pin required" });
+
+    if (!login || !pin) {
+      return res
+        .status(400)
+        .json({ success: false, message: "login and pin required" });
+    }
 
     const nLogin = normLower(login);
 
@@ -528,11 +677,20 @@ export async function shopOwnerLogin(req: Request, res: Response) {
       $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(login) }],
     }).select("+pinHash +refreshTokenHash");
 
-    if (!doc) return res.status(401).json({ success: false, message: "Invalid credentials" });
-    if ((doc as any).isActive === false) return res.status(403).json({ success: false, message: "Account not activated" });
+    if (!doc) {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+
+    if ((doc as any).isActive === false) {
+      return res
+        .status(403)
+        .json({ success: false, message: "Account not activated" });
+    }
 
     const ok = await bcrypt.compare(normTrim(pin), (doc as any).pinHash);
-    if (!ok) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!ok) {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
 
     const accessToken = signAccessToken(String(doc._id), "SHOP_OWNER");
     const refreshToken = signRefreshToken(String(doc._id), "SHOP_OWNER");
@@ -540,9 +698,18 @@ export async function shopOwnerLogin(req: Request, res: Response) {
     (doc as any).refreshTokenHash = await bcrypt.hash(refreshToken, 10);
     await doc.save();
 
-    return res.json({ success: true, accessToken, refreshToken, data: safe(doc) });
+    return res.json({
+      success: true,
+      accessToken,
+      refreshToken,
+      data: safe(doc),
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
@@ -550,65 +717,111 @@ export async function shopOwnerLogin(req: Request, res: Response) {
 export async function shopOwnerRefresh(req: Request, res: Response) {
   try {
     const { refreshToken } = req.body as any;
-    if (!refreshToken) return res.status(401).json({ success: false, message: "Refresh token required" });
+
+    if (!refreshToken) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Refresh token required" });
+    }
 
     const decoded = verifyRefreshToken(refreshToken) as any;
 
-    const doc = await ShopOwnerModel.findById(decoded.sub).select("+refreshTokenHash");
-    if (!doc || !(doc as any).refreshTokenHash) return res.status(401).json({ success: false, message: "Session expired" });
+    const doc = await ShopOwnerModel.findById(decoded.sub).select(
+      "+refreshTokenHash"
+    );
+
+    if (!doc || !(doc as any).refreshTokenHash) {
+      return res.status(401).json({ success: false, message: "Session expired" });
+    }
 
     const match = await bcrypt.compare(refreshToken, (doc as any).refreshTokenHash);
-    if (!match) return res.status(401).json({ success: false, message: "Session expired" });
+    if (!match) {
+      return res.status(401).json({ success: false, message: "Session expired" });
+    }
 
     const accessToken = signAccessToken(String(doc._id), "SHOP_OWNER");
     return res.json({ success: true, accessToken });
   } catch {
-    return res.status(401).json({ success: false, message: "Invalid refresh token" });
+    return res.status(401).json({
+      success: false,
+      message: "Invalid refresh token",
+    });
   }
 }
 
-/** ✅ LOGOUT (SHOP_OWNER) */
+/** ✅ LOGOUT */
 export async function shopOwnerLogout(req: Request, res: Response) {
   const u = (req as any).user as { sub?: string; role?: string };
-  if (!u?.sub) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-  await ShopOwnerModel.updateOne({ _id: u.sub }, { $unset: { refreshTokenHash: 1 } });
+  if (!u?.sub) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+
+  await ShopOwnerModel.updateOne(
+    { _id: u.sub },
+    { $unset: { refreshTokenHash: 1 } }
+  );
+
   return res.json({ success: true, message: "Logged out" });
 }
+
 export async function getShopOwnerMe(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
 
-    if (!u?.sub) return res.status(401).json({ success: false, message: "Unauthorized" });
-    if (!isObjectId(u.sub)) return res.status(401).json({ success: false, message: "Invalid user id" });
+    if (!u?.sub) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    if (!isObjectId(u.sub)) {
+      return res.status(401).json({ success: false, message: "Invalid user id" });
+    }
 
     const doc = await ShopOwnerModel.findById(u.sub)
-      .populate({ path: "shopIds", select: "name isActive address frontImageUrl createdAt" })
+      .populate({
+        path: "shopIds",
+        select: "name isActive address frontImageUrl createdAt",
+      })
       .lean();
 
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
     return res.json({ success: true, data: safe(doc) });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
+
 export async function shopOwnerAvatarUpload(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
     const file = req.file as Express.Multer.File | undefined;
 
-    if (!u?.sub) return res.status(401).json({ success: false, message: "Unauthorized" });
-    if (!isObjectId(u.sub)) return res.status(401).json({ success: false, message: "Invalid user id" });
-    if (!file) return res.status(400).json({ success: false, message: "avatar file required" });
+    if (!u?.sub) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    if (!isObjectId(u.sub)) {
+      return res.status(401).json({ success: false, message: "Invalid user id" });
+    }
+
+    if (!file) {
+      return res.status(400).json({ success: false, message: "avatar file required" });
+    }
 
     const doc = await ShopOwnerModel.findById(u.sub).select("avatarUrl avatarPublicId");
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
-    // ✅ upload new first
     const up = await uploadToCloud(file, CLOUD_FOLDER_SHOPOWNER_AVATAR);
 
-    // ✅ delete old after successful upload
     if ((doc as any).avatarPublicId) {
       await cloudinaryDelete((doc as any).avatarPublicId);
     }
@@ -623,18 +836,30 @@ export async function shopOwnerAvatarUpload(req: Request, res: Response) {
       data: safe(doc),
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Upload failed", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Upload failed",
+      error: err?.message,
+    });
   }
 }
+
 export async function shopOwnerAvatarRemove(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
 
-    if (!u?.sub) return res.status(401).json({ success: false, message: "Unauthorized" });
-    if (!isObjectId(u.sub)) return res.status(401).json({ success: false, message: "Invalid user id" });
+    if (!u?.sub) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    if (!isObjectId(u.sub)) {
+      return res.status(401).json({ success: false, message: "Invalid user id" });
+    }
 
     const doc = await ShopOwnerModel.findById(u.sub).select("avatarUrl avatarPublicId");
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
     if ((doc as any).avatarPublicId) {
       await cloudinaryDelete((doc as any).avatarPublicId);
@@ -644,26 +869,51 @@ export async function shopOwnerAvatarRemove(req: Request, res: Response) {
     (doc as any).avatarPublicId = "";
     await doc.save();
 
-    return res.json({ success: true, message: "Avatar removed", data: safe(doc) });
+    return res.json({
+      success: true,
+      message: "Avatar removed",
+      data: safe(doc),
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
+
 export async function masterShopOwnerAvatarUpload(req: Request, res: Response) {
   try {
+    const u = (req as any).user as JwtUser;
     const id = String(req.params.id);
     const file = req.file as Express.Multer.File | undefined;
 
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
-    if (!file) return res.status(400).json({ success: false, message: "avatar file required" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
 
-    const doc = await ShopOwnerModel.findById(id).select("avatarUrl avatarPublicId");
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    if (!file) {
+      return res.status(400).json({ success: false, message: "avatar file required" });
+    }
 
-    // ✅ upload new first
+    const accessFilter = buildShopOwnerAccessFilter(u);
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const query =
+      Object.keys(accessFilter).length === 0
+        ? { _id: id }
+        : { _id: id, ...accessFilter };
+
+    const doc = await ShopOwnerModel.findOne(query).select("avatarUrl avatarPublicId");
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+
     const up = await uploadToCloud(file, CLOUD_FOLDER_SHOPOWNER_AVATAR);
 
-    // ✅ delete old after successful upload
     if ((doc as any).avatarPublicId) {
       await cloudinaryDelete((doc as any).avatarPublicId);
     }
@@ -678,16 +928,37 @@ export async function masterShopOwnerAvatarUpload(req: Request, res: Response) {
       data: safe(doc),
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Upload failed", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Upload failed",
+      error: err?.message,
+    });
   }
 }
+
 export async function masterShopOwnerAvatarRemove(req: Request, res: Response) {
   try {
+    const u = (req as any).user as JwtUser;
     const id = String(req.params.id);
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
 
-    const doc = await ShopOwnerModel.findById(id).select("avatarUrl avatarPublicId");
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+
+    const accessFilter = buildShopOwnerAccessFilter(u);
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const query =
+      Object.keys(accessFilter).length === 0
+        ? { _id: id }
+        : { _id: id, ...accessFilter };
+
+    const doc = await ShopOwnerModel.findOne(query).select("avatarUrl avatarPublicId");
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
     if ((doc as any).avatarPublicId) {
       await cloudinaryDelete((doc as any).avatarPublicId);
@@ -697,23 +968,47 @@ export async function masterShopOwnerAvatarRemove(req: Request, res: Response) {
     (doc as any).avatarPublicId = "";
     await doc.save();
 
-    return res.json({ success: true, message: "Avatar removed", data: safe(doc) });
+    return res.json({
+      success: true,
+      message: "Avatar removed",
+      data: safe(doc),
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
-/** =========================================================
- * ✅ ADMIN DOCS UPLOAD (BY ID)
- * PUT /:id/docs  (multipart/form-data)
- * fields: idProof, gstCertificate, udyamCertificate
- ========================================================= */
+
+/** ✅ ADMIN DOCS UPLOAD */
 export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
   try {
+    const u = (req as any).user as JwtUser;
     const id = String(req.params.id);
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
 
-    const doc = await ShopOwnerModel.findById(id).select("idProof gstCertificate udyamCertificate");
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+
+    const accessFilter = buildShopOwnerAccessFilter(u);
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const query =
+      Object.keys(accessFilter).length === 0
+        ? { _id: id }
+        : { _id: id, ...accessFilter };
+
+    const doc = await ShopOwnerModel.findOne(query).select(
+      "idProof gstCertificate udyamCertificate"
+    );
+
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
     const files = req.files as Record<string, Express.Multer.File[]> | undefined;
 
@@ -721,59 +1016,122 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
     const gstFile = files?.gstCertificate?.[0];
     const udyamFile = files?.udyamCertificate?.[0];
 
-    // ✅ Upload new first, then delete old (safe)
     if (idProofFile) {
       const up = await uploadDocument(idProofFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
       const oldPid = (doc as any).idProof?.publicId;
-      (doc as any).idProof = { url: up.url, publicId: up.publicId, mimeType: up.mimeType, fileName: up.fileName, bytes: up.bytes };
+      (doc as any).idProof = {
+        url: up.url,
+        publicId: up.publicId,
+        mimeType: up.mimeType,
+        fileName: up.fileName,
+        bytes: up.bytes,
+      };
       if (oldPid) await cloudinaryDelete(oldPid);
     }
 
     if (gstFile) {
       const up = await uploadDocument(gstFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
       const oldPid = (doc as any).gstCertificate?.publicId;
-      (doc as any).gstCertificate = { url: up.url, publicId: up.publicId, mimeType: up.mimeType, fileName: up.fileName, bytes: up.bytes };
+      (doc as any).gstCertificate = {
+        url: up.url,
+        publicId: up.publicId,
+        mimeType: up.mimeType,
+        fileName: up.fileName,
+        bytes: up.bytes,
+      };
       if (oldPid) await cloudinaryDelete(oldPid);
     }
 
     if (udyamFile) {
       const up = await uploadDocument(udyamFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
       const oldPid = (doc as any).udyamCertificate?.publicId;
-      (doc as any).udyamCertificate = { url: up.url, publicId: up.publicId, mimeType: up.mimeType, fileName: up.fileName, bytes: up.bytes };
+      (doc as any).udyamCertificate = {
+        url: up.url,
+        publicId: up.publicId,
+        mimeType: up.mimeType,
+        fileName: up.fileName,
+        bytes: up.bytes,
+      };
       if (oldPid) await cloudinaryDelete(oldPid);
     }
 
     await doc.save();
-    return res.json({ success: true, message: "Documents updated", data: safe(doc) });
+
+    return res.json({
+      success: true,
+      message: "Documents updated",
+      data: safe(doc),
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Upload failed", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Upload failed",
+      error: err?.message,
+    });
   }
 }
 
-/** ✅ ADMIN DOC REMOVE (BY ID + key) */
+/** ✅ ADMIN DOC REMOVE */
 export async function masterShopOwnerDocsRemove(req: Request, res: Response) {
   try {
+    const u = (req as any).user as JwtUser;
     const id = String(req.params.id);
     const key = String(req.params.key || "");
 
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
 
     const allowed = new Set(["idProof", "gstCertificate", "udyamCertificate"]);
-    if (!allowed.has(key)) return res.status(400).json({ success: false, message: "Invalid key" });
+    if (!allowed.has(key)) {
+      return res.status(400).json({ success: false, message: "Invalid key" });
+    }
 
-    const doc = await ShopOwnerModel.findById(id).select("idProof gstCertificate udyamCertificate");
-    if (!doc) return res.status(404).json({ success: false, message: "Not found" });
+    const accessFilter = buildShopOwnerAccessFilter(u);
+    if (accessFilter === null) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const query =
+      Object.keys(accessFilter).length === 0
+        ? { _id: id }
+        : { _id: id, ...accessFilter };
+
+    const doc = await ShopOwnerModel.findOne(query).select(
+      "idProof gstCertificate udyamCertificate"
+    );
+
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
 
     const cur = (doc as any)[key];
     const pid = cur?.publicId;
 
-    if (pid) await cloudinaryDelete(pid);
+    if (pid) {
+      await cloudinaryDelete(pid);
+    }
 
-    (doc as any)[key] = { url: "", publicId: "", mimeType: "", fileName: "", bytes: 0 };
+    (doc as any)[key] = {
+      url: "",
+      publicId: "",
+      mimeType: "",
+      fileName: "",
+      bytes: 0,
+    };
+
     await doc.save();
 
-    return res.json({ success: true, message: `${key} removed`, data: safe(doc) });
+    return res.json({
+      success: true,
+      message: `${key} removed`,
+      data: safe(doc),
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }

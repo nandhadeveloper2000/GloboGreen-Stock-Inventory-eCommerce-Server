@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth.middleware";
 import { requireRoles } from "../middlewares/rbac.middleware";
-import { upload } from "../middlewares/upload"; // ✅ your multer middleware
+import { upload } from "../middlewares/upload";
 import {
   createShopOwner,
   listShopOwners,
@@ -18,7 +18,7 @@ import {
   shopOwnerAvatarRemove,
   masterShopOwnerAvatarUpload,
   masterShopOwnerAvatarRemove,
-    masterShopOwnerDocsUpload,
+  masterShopOwnerDocsUpload,
   masterShopOwnerDocsRemove,
 } from "../controllers/shopowner.controller";
 
@@ -26,9 +26,9 @@ const router = Router();
 
 const uploadFields = upload.fields([
   { name: "avatar", maxCount: 1 },
-  { name: "idproof", maxCount: 1 }, // if you use it later
+  { name: "idproof", maxCount: 1 },
 ]);
-  
+
 /* ===================== AUTH (PUBLIC) ===================== */
 router.post("/login", shopOwnerLogin);
 router.post("/refresh", shopOwnerRefresh);
@@ -53,23 +53,56 @@ router.delete(
 );
 
 /* ===================== ADMIN CREATE ===================== */
-/** ✅ IMPORTANT: createdBy schema supports only MASTER_ADMIN | MANAGER */
-router.post("/", auth, requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"), uploadFields, createShopOwner);
+router.post(
+  "/",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  uploadFields,
+  createShopOwner
+);
 
 /* ===================== ADMIN ACTIVE TOGGLE ===================== */
-router.put("/:id/activate", auth, requireRoles("MASTER_ADMIN", "MANAGER"), toggleShopOwnerActive);
+router.put(
+  "/:id/activate",
+  auth,
+  requireRoles("MASTER_ADMIN"),
+  toggleShopOwnerActive
+);
 
 /* ===================== ADMIN CRUD ===================== */
-router.get("/", auth, requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"), listShopOwners);
-router.get("/:id", auth, requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"), getShopOwner);
-router.put("/:id", auth, requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"), updateShopOwner);
-router.delete("/:id", auth, requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"), deleteShopOwner);
+router.get(
+  "/",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  listShopOwners
+);
 
-  /* ===================== ADMIN AVATAR (BY ID) ===================== */
+router.get(
+  "/:id",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  getShopOwner
+);
+
+router.put(
+  "/:id",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  updateShopOwner
+);
+
+router.delete(
+  "/:id",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  deleteShopOwner
+);
+
+/* ===================== ADMIN AVATAR (BY ID) ===================== */
 router.put(
   "/:id/avatar",
   auth,
-  requireRoles("MASTER_ADMIN", "MANAGER","SUPERVISOR", "STAFF"),
+  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
   upload.single("avatar"),
   masterShopOwnerAvatarUpload
 );
@@ -77,9 +110,10 @@ router.put(
 router.delete(
   "/:id/avatar",
   auth,
-  requireRoles("MASTER_ADMIN", "MANAGER","SUPERVISOR", "STAFF"),
+  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
   masterShopOwnerAvatarRemove
 );
+
 /* ===================== ADMIN DOCS (BY ID) ===================== */
 router.put(
   "/:id/docs",
@@ -99,4 +133,5 @@ router.delete(
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
   masterShopOwnerDocsRemove
 );
+
 export default router;
