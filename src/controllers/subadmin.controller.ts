@@ -299,26 +299,48 @@ export async function deleteSubAdmin(req: Request, res: Response) {
 // ✅ LOGIN
 export async function subAdminLogin(req: Request, res: Response) {
   try {
-    const { login, pin } = req.body as { login?: string; pin?: string };
+    const { login, username, pin } = req.body as {
+      login?: string;
+      username?: string;
+      pin?: string;
+    };
 
-    if (!login || !pin) {
-      return res.status(400).json({ success: false, message: "login and pin required" });
+    const loginValue = login || username;
+
+    if (!loginValue || !pin) {
+      return res.status(400).json({
+        success: false,
+        message: "login and pin required",
+      });
     }
 
-    const nLogin = String(login).trim().toLowerCase();
+    const nLogin = String(loginValue).trim().toLowerCase();
 
     const doc = await SubAdminModel.findOne({
       $or: [{ email: nLogin }, { username: nLogin }, { mobile: nLogin }],
     });
 
-    if (!doc) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!doc) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
 
     if (doc.isActive === false) {
-      return res.status(403).json({ success: false, message: "Account disabled" });
+      return res.status(403).json({
+        success: false,
+        message: "Account disabled",
+      });
     }
 
     const isMatch = await bcrypt.compare(String(pin).trim(), doc.pinHash);
-    if (!isMatch) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
 
     const role = toRole(doc.roles?.[0], "MANAGER");
 
@@ -336,7 +358,11 @@ export async function subAdminLogin(req: Request, res: Response) {
       data: safeSubAdmin(doc),
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
