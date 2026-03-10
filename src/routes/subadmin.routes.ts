@@ -11,12 +11,19 @@ import {
   getSubAdminMe,
   listSubAdmins,
   updateSubAdmin,
-  updateSubAdminMe, // ✅ NEW
+  updateSubAdminMe,
   subAdminLogin,
   subAdminLogout,
   subAdminAvatarUpload,
   subAdminAvatarRemove,
   masterSubAdminAvatarUpload,
+
+  // ✅ add these
+  subAdminRefreshToken,
+  forgotSubAdminPin,
+  verifySubAdminPinOtp,
+  resetSubAdminPin,
+  changeSubAdminPin,
 } from "../controllers/subadmin.controller";
 
 const router = Router();
@@ -28,10 +35,20 @@ const uploadFields = upload.fields([
 
 /* ===================== AUTH (SUBADMIN) ===================== */
 router.post("/login", subAdminLogin);
+router.post("/refresh-token", subAdminRefreshToken);
+
+// ✅ forgot/reset PIN public routes
+router.post("/forgot-pin", forgotSubAdminPin);
+router.post("/verify-pin-otp", verifySubAdminPinOtp);
+router.post("/reset-pin", resetSubAdminPin);
+
 router.post("/logout", auth, requireSubAdmin, subAdminLogout);
 
 /* ===================== SUBADMIN SELF ===================== */
 router.get("/me", auth, requireSubAdmin, getSubAdminMe);
+
+// ✅ logged-in change PIN
+router.put("/me/change-pin", auth, requireSubAdmin, changeSubAdminPin);
 
 router.post(
   "/me/avatar",
@@ -63,7 +80,7 @@ router.get("/", auth, requireMaster, listSubAdmins);
 
 router.get("/:id", auth, requireMaster, getSubAdminById);
 
-// ✅ MASTER UPDATE (ONLY ONE PUT /:id)
+// ✅ MASTER UPDATE
 router.put("/:id", auth, requireMaster, uploadFields, updateSubAdmin);
 
 // ✅ MASTER AVATAR CHANGE

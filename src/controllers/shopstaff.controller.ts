@@ -1,11 +1,7 @@
-// src/controllers/shopstaff.controller.ts
-// ✅ FULL (Secure RBAC + Same-Shop + Self-only rules)
-// Supports: create, list, get, update, delete, login, refresh, logout
-// Roles: SHOP_OWNER, SHOP_MANAGER, SHOP_SUPERVISOR, EMPLOYEE
-
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 
 import { ShopStaffModel } from "../models/shopstaff.model";
 import { ShopModel } from "../models/shop.model";
@@ -13,6 +9,7 @@ import { ShopOwnerModel } from "../models/shopowner.model";
 
 import cloudinary, { cloudinaryDelete } from "../config/cloudinary";
 import { hashPin } from "../utils/pin";
+import { sendShopStaffPinResetOtpEmail } from "../utils/sendShopStaffPinResetOtpEmail";
 import {
   signAccessToken,
   signRefreshToken,
@@ -31,11 +28,14 @@ function safe(doc: any) {
   if (!o) return o;
   delete o.pinHash;
   delete o.refreshTokenHash;
+  delete o.pinResetOtpHash;
+  delete o.pinResetOtpExpiresAt;
+  delete o.pinResetAttempts;
+  delete o.pinResetTokenHash;
+  delete o.pinResetTokenExpiresAt;
   return o;
 }
 
-/* ---------------- Role normalization (string -> Role) ---------------- */
-// ShopStaff tokens must only be one of these roles.
 const SHOPSTAFF_ROLE_SET = new Set<Role>([
   "SHOP_OWNER",
   "SHOP_MANAGER",
@@ -85,8 +85,23 @@ async function safeCloudDelete(publicId?: string) {
   }
 }
 
+function generateOtp(length = 6) {
+  let otp = "";
+  for (let i = 0; i < length; i++) otp += Math.floor(Math.random() * 10).toString();
+  return otp;
+}
+
+function generateResetToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+async function hashText(value: string) {
+  const salt = await bcrypt.genSalt(10);
+  return bcrypt.hash(value, salt);
+}
+
 /** =========================
- *  ✅ Actor resolution
+ *  Actor resolution
  *  ========================= */
 type ActorCtx =
   | { kind: "OWNER"; ownerId: string }
@@ -101,7 +116,6 @@ async function resolveActor(u: JwtUser): Promise<ActorCtx | null> {
     return { kind: "OWNER", ownerId: String(u.sub) };
   }
 
-  // For STAFF tokens, validate staff exists + active + read shopId
   const actorStaff = await ShopStaffModel.findById(u.sub)
     .select("shopId roles isActive")
     .lean();
@@ -123,7 +137,7 @@ async function resolveActor(u: JwtUser): Promise<ActorCtx | null> {
 }
 
 /** =========================
- *  ✅ Access checks
+ *  Access checks
  *  ========================= */
 async function ownerOwnsShop(ownerId: string, shopId: string) {
   const shop = await ShopModel.findById(shopId)
@@ -137,27 +151,27 @@ async function canAccessTargetStaff(actor: ActorCtx, targetStaff: any) {
   const targetId = String(targetStaff?._id || "");
   const targetShopId = String(targetStaff?.shopId || "");
 
-  if (!targetId || !targetShopId) return { ok: false as const, reason: "Target invalid" };
+  if (!targetId || !targetShopId) {
+    return { ok: false as const, reason: "Target invalid" };
+  }
 
-  // OWNER: allowed only if owner owns staff's shop
   if (actor.kind === "OWNER") {
     const owns = await ownerOwnsShop(actor.ownerId, targetShopId);
     if (!owns) return { ok: false as const, reason: "Access denied" };
     return { ok: true as const, scope: "OWNER" as const };
   }
 
-  // STAFF: must be same shop
-  if (String(actor.shopId) !== String(targetShopId))
+  if (String(actor.shopId) !== String(targetShopId)) {
     return { ok: false as const, reason: "Access denied" };
+  }
 
-  // EMPLOYEE/SUPERVISOR: self-only
   if (actor.staffRole === "EMPLOYEE" || actor.staffRole === "SHOP_SUPERVISOR") {
-    if (String(actor.staffId) !== String(targetId))
+    if (String(actor.staffId) !== String(targetId)) {
       return { ok: false as const, reason: "Access denied" };
+    }
     return { ok: true as const, scope: "SELF" as const };
   }
 
-  // MANAGER: any staff in same shop
   if (actor.staffRole === "SHOP_MANAGER") {
     return { ok: true as const, scope: "MANAGER" as const };
   }
@@ -166,7 +180,9 @@ async function canAccessTargetStaff(actor: ActorCtx, targetStaff: any) {
 }
 
 async function canAccessShopList(actor: ActorCtx, shopId: string) {
-  if (!shopId || !isObjectId(shopId)) return { ok: false as const, reason: "Invalid shopId" };
+  if (!shopId || !isObjectId(shopId)) {
+    return { ok: false as const, reason: "Invalid shopId" };
+  }
 
   if (actor.kind === "OWNER") {
     const owns = await ownerOwnsShop(actor.ownerId, shopId);
@@ -174,15 +190,16 @@ async function canAccessShopList(actor: ActorCtx, shopId: string) {
     return { ok: true as const };
   }
 
-  // STAFF (manager) can list for own shop only
   if (actor.shopId !== shopId) return { ok: false as const, reason: "Access denied" };
-  if (actor.staffRole !== "SHOP_MANAGER") return { ok: false as const, reason: "Access denied" };
+  if (actor.staffRole !== "SHOP_MANAGER") {
+    return { ok: false as const, reason: "Access denied" };
+  }
+
   return { ok: true as const };
 }
 
 /** =========================
- *  ✅ CREATE (SHOP_OWNER / SHOP_MANAGER)
- *  Security: Owner must own shop; Manager must be manager of same shop.
+ *  CREATE
  *  ========================= */
 export async function createShopStaff(req: Request, res: Response) {
   try {
@@ -208,44 +225,47 @@ export async function createShopStaff(req: Request, res: Response) {
         message: "shopId, name, username, email, pin required",
       });
     }
-    if (!isObjectId(shopId)) return res.status(400).json({ success: false, message: "Invalid shopId" });
 
-    // ✅ creator permission
+    if (!isObjectId(shopId)) {
+      return res.status(400).json({ success: false, message: "Invalid shopId" });
+    }
+
     if (actor.kind === "OWNER") {
       const owns = await ownerOwnsShop(actor.ownerId, String(shopId));
       if (!owns) return res.status(403).json({ success: false, message: "Access denied" });
     } else {
-      // staff creator must be SHOP_MANAGER and same shop
-      if (actor.staffRole !== "SHOP_MANAGER")
+      if (actor.staffRole !== "SHOP_MANAGER") {
         return res.status(403).json({ success: false, message: "Access denied" });
-      if (String(actor.shopId) !== String(shopId))
+      }
+      if (String(actor.shopId) !== String(shopId)) {
         return res.status(403).json({ success: false, message: "Access denied" });
+      }
     }
 
-    const roleArr =
-      Array.isArray(roles)
-        ? roles.map((r: any) => String(r).toUpperCase())
-        : roles
-        ? [String(roles).toUpperCase()]
-        : ["EMPLOYEE"];
+    const roleArr = Array.isArray(roles)
+      ? roles.map((r: any) => String(r).toUpperCase())
+      : roles
+      ? [String(roles).toUpperCase()]
+      : ["EMPLOYEE"];
 
     const primaryRole = String(roleArr[0] || "EMPLOYEE").toUpperCase();
 
-    // ✅ Manager cannot create another manager
-    if (actor.kind === "STAFF" && actor.staffRole === "SHOP_MANAGER" && primaryRole === "SHOP_MANAGER") {
+    if (
+      actor.kind === "STAFF" &&
+      actor.staffRole === "SHOP_MANAGER" &&
+      primaryRole === "SHOP_MANAGER"
+    ) {
       return res.status(403).json({
         success: false,
         message: "SHOP_MANAGER cannot create another SHOP_MANAGER",
       });
     }
 
-    // ✅ normalize for storage + checks
     const nEmail = normLower(email);
     const nUsername = normLower(username);
     const nMobile = mobile ? normTrim(mobile) : "";
     const nAdditional = additionalNumber ? normTrim(additionalNumber) : "";
 
-    // ✅ field-wise duplicate check
     const or: any[] = [];
     if (nEmail) or.push({ email: nEmail });
     if (nUsername) or.push({ username: nUsername });
@@ -262,29 +282,35 @@ export async function createShopStaff(req: Request, res: Response) {
         if (nEmail && (m as any).email === nEmail) errors.email = "email already exists";
         if (nUsername && (m as any).username === nUsername) errors.username = "username already exists";
         if (nMobile && (m as any).mobile === nMobile) errors.mobile = "mobile already exists";
-        if (nAdditional && (m as any).additionalNumber === nAdditional)
+        if (nAdditional && (m as any).additionalNumber === nAdditional) {
           errors.additionalNumber = "additionalNumber already exists";
+        }
       }
+
       if (Object.keys(errors).length) {
-        return res.status(409).json({ success: false, message: "Duplicate fields", errors });
+        return res.status(409).json({
+          success: false,
+          message: "Duplicate fields",
+          errors,
+        });
       }
     }
 
-    // ✅ files
     const files = req.files as { [k: string]: Express.Multer.File[] } | undefined;
     const avatarFile = files?.avatar?.[0];
     const idProofFile = files?.idproof?.[0];
 
-    let avatarUrl = "",
-      avatarPublicId = "";
-    let idProofUrl = "",
-      idProofPublicId = "";
+    let avatarUrl = "";
+    let avatarPublicId = "";
+    let idProofUrl = "";
+    let idProofPublicId = "";
 
     if (avatarFile) {
       const up = await uploadToCloud(avatarFile, "Shop Stack/shopstaff/avatar");
       avatarUrl = up.url;
       avatarPublicId = up.publicId;
     }
+
     if (idProofFile) {
       const up = await uploadToCloud(idProofFile, "Shop Stack/shopstaff/idproof");
       idProofUrl = up.url;
@@ -319,12 +345,17 @@ export async function createShopStaff(req: Request, res: Response) {
         errors: { [key]: `${key} already exists` },
       });
     }
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
 /** =========================
- *  ✅ LIST (SHOP_OWNER / SHOP_MANAGER)
+ *  LIST
  *  ========================= */
 export async function listShopStaff(req: Request, res: Response) {
   try {
@@ -335,17 +366,22 @@ export async function listShopStaff(req: Request, res: Response) {
     const { shopId } = req.query as any;
 
     const filter: any = {};
+
     if (shopId) {
       const access = await canAccessShopList(actor, String(shopId));
-      if (!access.ok) return res.status(403).json({ success: false, message: access.reason });
+      if (!access.ok) {
+        return res.status(403).json({ success: false, message: access.reason });
+      }
       filter.shopId = shopId;
     } else {
       if (actor.kind === "STAFF") {
         return res.status(400).json({ success: false, message: "shopId query required" });
       }
+
       const shops = await ShopModel.find({ shopOwnerAccountId: actor.ownerId })
         .select("_id")
         .lean();
+
       const shopIds = shops.map((s: any) => s._id);
       filter.shopId = { $in: shopIds };
     }
@@ -353,12 +389,16 @@ export async function listShopStaff(req: Request, res: Response) {
     const items = await ShopStaffModel.find(filter).sort({ createdAt: -1 });
     return res.json({ success: true, data: items.map(safe) });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
 /** =========================
- *  ✅ GET ONE (SECURE)
+ *  GET ONE
  *  ========================= */
 export async function getShopStaff(req: Request, res: Response) {
   try {
@@ -367,22 +407,33 @@ export async function getShopStaff(req: Request, res: Response) {
     if (!actor) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const id = String(req.params.id || "").trim();
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
 
-    const target = await ShopStaffModel.findById(id).select("+pinHash +refreshTokenHash shopId isActive roles");
+    const target = await ShopStaffModel.findById(id).select(
+      "+pinHash +refreshTokenHash +pinResetOtpHash +pinResetTokenHash shopId isActive roles"
+    );
+
     if (!target) return res.status(404).json({ success: false, message: "Not found" });
 
     const access = await canAccessTargetStaff(actor, target);
-    if (!access.ok) return res.status(403).json({ success: false, message: access.reason });
+    if (!access.ok) {
+      return res.status(403).json({ success: false, message: access.reason });
+    }
 
     return res.json({ success: true, data: safe(target) });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
 /** =========================
- *  ✅ UPDATE (SECURE)
+ *  UPDATE
  *  ========================= */
 export async function updateShopStaff(req: Request, res: Response) {
   try {
@@ -391,21 +442,25 @@ export async function updateShopStaff(req: Request, res: Response) {
     if (!actor) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const id = String(req.params.id || "").trim();
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
 
     const doc = await ShopStaffModel.findById(id).select(
-      "+pinHash +refreshTokenHash shopId isActive roles avatarPublicId idProofPublicId"
+      "+pinHash +refreshTokenHash +pinResetOtpHash +pinResetTokenHash shopId isActive roles avatarPublicId idProofPublicId"
     );
+
     if (!doc) return res.status(404).json({ success: false, message: "Not found" });
 
     const access = await canAccessTargetStaff(actor, doc);
-    if (!access.ok) return res.status(403).json({ success: false, message: access.reason });
+    if (!access.ok) {
+      return res.status(403).json({ success: false, message: access.reason });
+    }
 
     const body = req.body as any;
 
     const isOwnerScope = access.scope === "OWNER";
     const isManagerScope = access.scope === "MANAGER";
-    const isSelfScope = access.scope === "SELF";
 
     const allow = {
       self: new Set(["name", "mobile", "additionalNumber", "address", "pin"]),
@@ -435,7 +490,6 @@ export async function updateShopStaff(req: Request, res: Response) {
 
     const allowed = isOwnerScope ? allow.owner : isManagerScope ? allow.manager : allow.self;
 
-    // ✅ files
     const files = req.files as { [k: string]: Express.Multer.File[] } | undefined;
     const avatarFile = files?.avatar?.[0];
     const idProofFile = files?.idproof?.[0];
@@ -446,6 +500,7 @@ export async function updateShopStaff(req: Request, res: Response) {
       (doc as any).avatarUrl = up.url;
       (doc as any).avatarPublicId = up.publicId;
     }
+
     if (idProofFile) {
       await safeCloudDelete((doc as any).idProofPublicId);
       const up = await uploadToCloud(idProofFile, "Shop Stack/shopstaff/idproof");
@@ -453,31 +508,62 @@ export async function updateShopStaff(req: Request, res: Response) {
       (doc as any).idProofPublicId = up.publicId;
     }
 
-    // ✅ duplicate check
     const or: any[] = [];
-    if (allowed.has("email") && body.email !== undefined) or.push({ email: normLower(body.email) });
-    if (allowed.has("username") && body.username !== undefined) or.push({ username: normLower(body.username) });
-    if (allowed.has("mobile") && body.mobile !== undefined) or.push({ mobile: normTrim(body.mobile) });
-    if (allowed.has("additionalNumber") && body.additionalNumber !== undefined)
+    if (allowed.has("email") && body.email !== undefined) {
+      or.push({ email: normLower(body.email) });
+    }
+    if (allowed.has("username") && body.username !== undefined) {
+      or.push({ username: normLower(body.username) });
+    }
+    if (allowed.has("mobile") && body.mobile !== undefined) {
+      or.push({ mobile: normTrim(body.mobile) });
+    }
+    if (allowed.has("additionalNumber") && body.additionalNumber !== undefined) {
       or.push({ additionalNumber: normTrim(body.additionalNumber) });
-
-    if (or.length) {
-      const exists = await ShopStaffModel.findOne({ _id: { $ne: doc._id }, $or: or }).select("_id");
-      if (exists) return res.status(409).json({ success: false, message: "Already exists (duplicate field)" });
     }
 
-    // ✅ apply updates
-    if (allowed.has("name") && body.name !== undefined) (doc as any).name = normTrim(body.name);
-    if (allowed.has("username") && body.username !== undefined) (doc as any).username = normLower(body.username);
-    if (allowed.has("email") && body.email !== undefined) (doc as any).email = normLower(body.email);
-    if (allowed.has("mobile") && body.mobile !== undefined) (doc as any).mobile = normTrim(body.mobile);
-    if (allowed.has("additionalNumber") && body.additionalNumber !== undefined)
-      (doc as any).additionalNumber = normTrim(body.additionalNumber);
-    if (allowed.has("address") && body.address !== undefined) (doc as any).address = body.address || {};
-    if (allowed.has("pin") && body.pin !== undefined && normTrim(body.pin))
-      (doc as any).pinHash = await hashPin(normTrim(body.pin));
+    if (or.length) {
+      const exists = await ShopStaffModel.findOne({
+        _id: { $ne: doc._id },
+        $or: or,
+      }).select("_id");
 
-    // ✅ roles restrictions
+      if (exists) {
+        return res.status(409).json({
+          success: false,
+          message: "Already exists (duplicate field)",
+        });
+      }
+    }
+
+    if (allowed.has("name") && body.name !== undefined) {
+      (doc as any).name = normTrim(body.name);
+    }
+    if (allowed.has("username") && body.username !== undefined) {
+      (doc as any).username = normLower(body.username);
+    }
+    if (allowed.has("email") && body.email !== undefined) {
+      (doc as any).email = normLower(body.email);
+    }
+    if (allowed.has("mobile") && body.mobile !== undefined) {
+      (doc as any).mobile = normTrim(body.mobile);
+    }
+    if (allowed.has("additionalNumber") && body.additionalNumber !== undefined) {
+      (doc as any).additionalNumber = normTrim(body.additionalNumber);
+    }
+    if (allowed.has("address") && body.address !== undefined) {
+      (doc as any).address = body.address || {};
+    }
+    if (allowed.has("pin") && body.pin !== undefined && normTrim(body.pin)) {
+      (doc as any).pinHash = await hashPin(normTrim(body.pin));
+      (doc as any).refreshTokenHash = "";
+      (doc as any).pinResetOtpHash = "";
+      (doc as any).pinResetOtpExpiresAt = null;
+      (doc as any).pinResetAttempts = 0;
+      (doc as any).pinResetTokenHash = "";
+      (doc as any).pinResetTokenExpiresAt = null;
+    }
+
     if (allowed.has("roles") && body.roles !== undefined) {
       const nextRoles = Array.isArray(body.roles)
         ? body.roles.map((r: any) => String(r).toUpperCase())
@@ -493,15 +579,18 @@ export async function updateShopStaff(req: Request, res: Response) {
             message: "SHOP_MANAGER cannot assign SHOP_MANAGER role",
           });
         }
+
         if (targetPrimary === "SHOP_MANAGER" && String(doc._id) !== (actor as any).staffId) {
-          return res.status(403).json({ success: false, message: "Cannot modify another SHOP_MANAGER" });
+          return res.status(403).json({
+            success: false,
+            message: "Cannot modify another SHOP_MANAGER",
+          });
         }
       }
 
       (doc as any).roles = nextRoles;
     }
 
-    // ✅ isActive restrictions
     if (allowed.has("isActive") && body.isActive !== undefined) {
       const nextActive = String(body.isActive) === "true" || body.isActive === true;
 
@@ -529,12 +618,17 @@ export async function updateShopStaff(req: Request, res: Response) {
         errors: { [key]: `${key} already exists` },
       });
     }
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
 /** =========================
- *  ✅ DELETE (SHOP_OWNER / SHOP_MANAGER)
+ *  DELETE
  *  ========================= */
 export async function deleteShopStaff(req: Request, res: Response) {
   try {
@@ -543,21 +637,34 @@ export async function deleteShopStaff(req: Request, res: Response) {
     if (!actor) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const id = String(req.params.id || "").trim();
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
 
-    const doc = await ShopStaffModel.findById(id).select("shopId roles avatarPublicId idProofPublicId");
+    const doc = await ShopStaffModel.findById(id).select(
+      "shopId roles avatarPublicId idProofPublicId"
+    );
+
     if (!doc) return res.status(404).json({ success: false, message: "Not found" });
 
     if (actor.kind === "OWNER") {
       const owns = await ownerOwnsShop(actor.ownerId, String((doc as any).shopId));
       if (!owns) return res.status(403).json({ success: false, message: "Access denied" });
     } else {
-      if (actor.staffRole !== "SHOP_MANAGER") return res.status(403).json({ success: false, message: "Access denied" });
-      if (String(actor.shopId) !== String((doc as any).shopId)) return res.status(403).json({ success: false, message: "Access denied" });
+      if (actor.staffRole !== "SHOP_MANAGER") {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
+
+      if (String(actor.shopId) !== String((doc as any).shopId)) {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
 
       const targetPrimary = String((doc as any).roles?.[0] || "EMPLOYEE").toUpperCase();
       if (targetPrimary === "SHOP_MANAGER" && String(doc._id) !== actor.staffId) {
-        return res.status(403).json({ success: false, message: "Cannot delete another SHOP_MANAGER" });
+        return res.status(403).json({
+          success: false,
+          message: "Cannot delete another SHOP_MANAGER",
+        });
       }
     }
 
@@ -567,39 +674,59 @@ export async function deleteShopStaff(req: Request, res: Response) {
     await doc.deleteOne();
     return res.json({ success: true, message: "Deleted" });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
 /** =========================
- *  ✅ LOGIN
+ *  LOGIN
  *  ========================= */
 export async function shopStaffLogin(req: Request, res: Response) {
   try {
     const { login, pin } = req.body as any;
-    if (!login || !pin) return res.status(400).json({ success: false, message: "login and pin required" });
+    if (!login || !pin) {
+      return res.status(400).json({ success: false, message: "login and pin required" });
+    }
 
     const nLogin = normLower(login);
 
     const staff = await ShopStaffModel.findOne({
       $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(login) }],
-    }).select("+pinHash +refreshTokenHash shopId isActive roles");
+    }).select(
+      "+pinHash +refreshTokenHash +pinResetOtpHash +pinResetTokenHash shopId isActive roles"
+    );
 
-    if (!staff) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!staff) {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
 
     if ((staff as any).isActive === false) {
       return res.status(403).json({ success: false, message: "Staff account deactivated" });
     }
 
-    const shop = await ShopModel.findById((staff as any).shopId).select("shopOwnerAccountId isActive");
-    if (!shop) return res.status(403).json({ success: false, message: "Shop not found" });
+    const shop = await ShopModel.findById((staff as any).shopId).select(
+      "shopOwnerAccountId isActive"
+    );
+
+    if (!shop) {
+      return res.status(403).json({ success: false, message: "Shop not found" });
+    }
 
     if ((shop as any).isActive === false) {
       return res.status(403).json({ success: false, message: "Shop is deactivated" });
     }
 
-    const owner = await ShopOwnerModel.findById((shop as any).shopOwnerAccountId).select("isActive validTo");
-    if (!owner) return res.status(403).json({ success: false, message: "ShopOwner not found" });
+    const owner = await ShopOwnerModel.findById((shop as any).shopOwnerAccountId).select(
+      "isActive validTo"
+    );
+
+    if (!owner) {
+      return res.status(403).json({ success: false, message: "ShopOwner not found" });
+    }
 
     if ((owner as any).isActive === false) {
       return res.status(403).json({ success: false, message: "ShopOwner account not activated" });
@@ -610,7 +737,9 @@ export async function shopStaffLogin(req: Request, res: Response) {
     }
 
     const ok = await bcrypt.compare(normTrim(pin), (staff as any).pinHash);
-    if (!ok) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!ok) {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
 
     const role = toShopStaffRole((staff as any).roles?.[0], "EMPLOYEE");
 
@@ -624,6 +753,7 @@ export async function shopStaffLogin(req: Request, res: Response) {
       success: true,
       accessToken,
       refreshToken,
+      role,
       data: safe(staff),
       meta: {
         shopId: String((shop as any)._id),
@@ -631,51 +761,443 @@ export async function shopStaffLogin(req: Request, res: Response) {
       },
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: "Server error", error: err?.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
 }
 
 /** =========================
- *  ✅ REFRESH
+ *  REFRESH
  *  ========================= */
 export async function shopStaffRefresh(req: Request, res: Response) {
   try {
     const { refreshToken } = req.body as any;
-    if (!refreshToken) return res.status(401).json({ success: false, message: "Refresh token required" });
+    if (!refreshToken) {
+      return res.status(401).json({ success: false, message: "Refresh token required" });
+    }
 
     const decoded = verifyRefreshToken(refreshToken) as any;
 
-    const staff = await ShopStaffModel.findById(decoded.sub).select("+refreshTokenHash shopId isActive roles");
+    const staff = await ShopStaffModel.findById(decoded.sub).select(
+      "+refreshTokenHash shopId isActive roles"
+    );
+
     if (!staff || !(staff as any).refreshTokenHash) {
       return res.status(401).json({ success: false, message: "Session expired" });
     }
 
-    if ((staff as any).isActive === false) return res.status(403).json({ success: false, message: "Staff account deactivated" });
+    if ((staff as any).isActive === false) {
+      return res.status(403).json({ success: false, message: "Staff account deactivated" });
+    }
 
-    const shop = await ShopModel.findById((staff as any).shopId).select("shopOwnerAccountId isActive");
-    if (!shop || (shop as any).isActive === false) return res.status(403).json({ success: false, message: "Shop is deactivated" });
+    const shop = await ShopModel.findById((staff as any).shopId).select(
+      "shopOwnerAccountId isActive"
+    );
 
-    const owner = await ShopOwnerModel.findById((shop as any).shopOwnerAccountId).select("isActive validTo");
-    if (!owner || (owner as any).isActive === false) return res.status(403).json({ success: false, message: "ShopOwner not active" });
+    if (!shop || (shop as any).isActive === false) {
+      return res.status(403).json({ success: false, message: "Shop is deactivated" });
+    }
+
+    const owner = await ShopOwnerModel.findById((shop as any).shopOwnerAccountId).select(
+      "isActive validTo"
+    );
+
+    if (!owner || (owner as any).isActive === false) {
+      return res.status(403).json({ success: false, message: "ShopOwner not active" });
+    }
 
     if ((owner as any).validTo && new Date((owner as any).validTo).getTime() < Date.now()) {
       return res.status(403).json({ success: false, message: "ShopOwner validity expired" });
     }
 
     const match = await bcrypt.compare(refreshToken, (staff as any).refreshTokenHash);
-    if (!match) return res.status(401).json({ success: false, message: "Session expired" });
+    if (!match) {
+      return res.status(401).json({ success: false, message: "Session expired" });
+    }
 
     const role = toShopStaffRole((staff as any).roles?.[0], "EMPLOYEE");
-    const accessToken = signAccessToken(String((staff as any)._id), role);
+    const newAccessToken = signAccessToken(String((staff as any)._id), role);
+    const newRefreshToken = signRefreshToken(String((staff as any)._id), role);
 
-    return res.json({ success: true, accessToken });
+    (staff as any).refreshTokenHash = await bcrypt.hash(newRefreshToken, 10);
+    await staff.save();
+
+    return res.json({
+      success: true,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      role,
+    });
   } catch {
     return res.status(401).json({ success: false, message: "Invalid refresh token" });
   }
 }
 
 /** =========================
- *  ✅ LOGOUT
+ *  FORGOT PIN
+ *  ========================= */
+export async function forgotShopStaffPin(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue) {
+      return res.status(400).json({
+        success: false,
+        message: "login/email/username/mobile required",
+      });
+    }
+
+    const nLogin = normLower(loginValue);
+
+    const staff = await ShopStaffModel.findOne({
+      $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(loginValue) }],
+    }).select(
+      "+pinResetOtpHash +pinResetTokenHash shopId isActive roles"
+    );
+
+    if (!staff) {
+      return res.json({
+        success: true,
+        message: "If the account exists, a PIN reset OTP has been sent",
+      });
+    }
+
+    if ((staff as any).isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Staff account deactivated",
+      });
+    }
+
+    const shop = await ShopModel.findById((staff as any).shopId).select(
+      "shopOwnerAccountId isActive"
+    );
+    if (!shop) {
+      return res.status(403).json({ success: false, message: "Shop not found" });
+    }
+
+    if ((shop as any).isActive === false) {
+      return res.status(403).json({ success: false, message: "Shop is deactivated" });
+    }
+
+    const owner = await ShopOwnerModel.findById((shop as any).shopOwnerAccountId).select(
+      "isActive validTo"
+    );
+    if (!owner) {
+      return res.status(403).json({ success: false, message: "ShopOwner not found" });
+    }
+
+    if ((owner as any).isActive === false) {
+      return res.status(403).json({ success: false, message: "ShopOwner account not activated" });
+    }
+
+    if ((owner as any).validTo && new Date((owner as any).validTo).getTime() < Date.now()) {
+      return res.status(403).json({ success: false, message: "ShopOwner validity expired" });
+    }
+
+    const otp = generateOtp(6);
+
+    (staff as any).pinResetOtpHash = await hashText(otp);
+    (staff as any).pinResetOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    (staff as any).pinResetAttempts = 0;
+    (staff as any).pinResetTokenHash = "";
+    (staff as any).pinResetTokenExpiresAt = null;
+
+    await staff.save();
+
+    await sendShopStaffPinResetOtpEmail((staff as any).email, otp, (staff as any).name);
+
+    return res.json({
+      success: true,
+      message: "If the account exists, a PIN reset OTP has been sent",
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/** =========================
+ *  VERIFY RESET OTP
+ *  ========================= */
+export async function verifyShopStaffPinOtp(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile, otp } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+      otp?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "login and otp required",
+      });
+    }
+
+    const nLogin = normLower(loginValue);
+
+    const staff = await ShopStaffModel.findOne({
+      $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(loginValue) }],
+    }).select("+pinResetOtpHash +pinResetTokenHash");
+
+    if (!staff) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    if (!(staff as any).pinResetOtpHash || !(staff as any).pinResetOtpExpiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: "No reset request found",
+      });
+    }
+
+    if (new Date((staff as any).pinResetOtpExpiresAt).getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP expired",
+      });
+    }
+
+    if (((staff as any).pinResetAttempts || 0) >= 5) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many invalid attempts. Request a new OTP.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(
+      String(otp).trim(),
+      (staff as any).pinResetOtpHash
+    );
+
+    if (!isMatch) {
+      (staff as any).pinResetAttempts = ((staff as any).pinResetAttempts || 0) + 1;
+      await staff.save();
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
+
+    const resetToken = generateResetToken();
+
+    (staff as any).pinResetTokenHash = await hashText(resetToken);
+    (staff as any).pinResetTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    (staff as any).pinResetOtpHash = "";
+    (staff as any).pinResetOtpExpiresAt = null;
+    (staff as any).pinResetAttempts = 0;
+
+    await staff.save();
+
+    return res.json({
+      success: true,
+      message: "OTP verified",
+      resetToken,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/** =========================
+ *  RESET PIN
+ *  ========================= */
+export async function resetShopStaffPin(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile, resetToken, newPin } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+      resetToken?: string;
+      newPin?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue || !resetToken || !newPin) {
+      return res.status(400).json({
+        success: false,
+        message: "login, resetToken and newPin required",
+      });
+    }
+
+    const pinValue = normTrim(newPin);
+    if (!/^\d{4,8}$/.test(pinValue)) {
+      return res.status(400).json({
+        success: false,
+        message: "PIN must be 4 to 8 digits",
+      });
+    }
+
+    const nLogin = normLower(loginValue);
+
+    const staff = await ShopStaffModel.findOne({
+      $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(loginValue) }],
+    }).select("+pinHash +refreshTokenHash +pinResetOtpHash +pinResetTokenHash");
+
+    if (!staff) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    if (!(staff as any).pinResetTokenHash || !(staff as any).pinResetTokenExpiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset session not found",
+      });
+    }
+
+    if (new Date((staff as any).pinResetTokenExpiresAt).getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset token expired",
+      });
+    }
+
+    const isValidToken = await bcrypt.compare(
+      String(resetToken).trim(),
+      (staff as any).pinResetTokenHash
+    );
+
+    if (!isValidToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid reset token",
+      });
+    }
+
+    (staff as any).pinHash = await hashPin(pinValue);
+    (staff as any).refreshTokenHash = "";
+
+    (staff as any).pinResetOtpHash = "";
+    (staff as any).pinResetOtpExpiresAt = null;
+    (staff as any).pinResetAttempts = 0;
+    (staff as any).pinResetTokenHash = "";
+    (staff as any).pinResetTokenExpiresAt = null;
+
+    await staff.save();
+
+    return res.json({
+      success: true,
+      message: "PIN reset successful. Please login again.",
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/** =========================
+ *  CHANGE PIN (SELF)
+ *  ========================= */
+export async function changeShopStaffPin(req: Request, res: Response) {
+  try {
+    const u = (req as any).user as JwtUser;
+    if (!u?.sub) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const { currentPin, newPin } = req.body as {
+      currentPin?: string;
+      newPin?: string;
+    };
+
+    if (!currentPin || !newPin) {
+      return res.status(400).json({
+        success: false,
+        message: "currentPin and newPin required",
+      });
+    }
+
+    const pinValue = normTrim(newPin);
+    if (!/^\d{4,8}$/.test(pinValue)) {
+      return res.status(400).json({
+        success: false,
+        message: "PIN must be 4 to 8 digits",
+      });
+    }
+
+    const staff = await ShopStaffModel.findById(u.sub).select(
+      "+pinHash +refreshTokenHash +pinResetOtpHash +pinResetTokenHash"
+    );
+
+    if (!staff) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    const ok = await bcrypt.compare(normTrim(currentPin), (staff as any).pinHash);
+    if (!ok) {
+      return res.status(400).json({
+        success: false,
+        message: "Current PIN is incorrect",
+      });
+    }
+
+    (staff as any).pinHash = await hashPin(pinValue);
+    (staff as any).refreshTokenHash = "";
+
+    (staff as any).pinResetOtpHash = "";
+    (staff as any).pinResetOtpExpiresAt = null;
+    (staff as any).pinResetAttempts = 0;
+    (staff as any).pinResetTokenHash = "";
+    (staff as any).pinResetTokenExpiresAt = null;
+
+    await staff.save();
+
+    return res.json({
+      success: true,
+      message: "PIN changed successfully. Please login again.",
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/** =========================
+ *  LOGOUT
  *  ========================= */
 export async function shopStaffLogout(req: Request, res: Response) {
   const u = (req as any).user as { sub?: string };

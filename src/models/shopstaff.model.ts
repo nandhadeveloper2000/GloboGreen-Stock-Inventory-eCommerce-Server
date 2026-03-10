@@ -26,7 +26,6 @@ const CreatedBySchema = new Schema(
 
 const ShopStaffSchema = new Schema(
   {
-    // ✅ belongs to which shop
     shopId: { type: Schema.Types.ObjectId, ref: "Shop", required: true, index: true },
 
     name: { type: String, required: true, trim: true },
@@ -52,6 +51,14 @@ const ShopStaffSchema = new Schema(
     createdBy: { type: CreatedBySchema, required: true },
 
     isActive: { type: Boolean, default: true },
+
+    // ✅ forgot/reset pin
+    pinResetOtpHash: { type: String, default: "", select: false },
+    pinResetOtpExpiresAt: { type: Date, default: null },
+    pinResetAttempts: { type: Number, default: 0 },
+
+    pinResetTokenHash: { type: String, default: "", select: false },
+    pinResetTokenExpiresAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

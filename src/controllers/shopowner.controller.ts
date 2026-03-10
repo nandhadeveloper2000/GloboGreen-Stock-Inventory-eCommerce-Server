@@ -1,9 +1,11 @@
 // src/controllers/shopowner.controller.ts
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
+import crypto from "crypto";
 import { ShopOwnerModel } from "../models/shopowner.model";
 import { hashPin } from "../utils/pin";
+import { sendShopOwnerPinResetOtpEmail } from "../utils/sendShopOwnerPinResetOtpEmail";
 import {
   signAccessToken,
   signRefreshToken,
@@ -13,12 +15,20 @@ import cloudinary from "../config/cloudinary";
 import streamifier from "streamifier";
 
 type JwtUser = { sub?: string; role?: string };
+type ShopOwnerFilter = Record<string, any>;
 
 function safe(doc: any) {
   const o = doc?.toObject ? doc.toObject() : doc;
   if (!o) return o;
+
   delete o.pinHash;
   delete o.refreshTokenHash;
+  delete o.pinResetOtpHash;
+  delete o.pinResetOtpExpiresAt;
+  delete o.pinResetAttempts;
+  delete o.pinResetTokenHash;
+  delete o.pinResetTokenExpiresAt;
+
   return o;
 }
 
@@ -26,13 +36,31 @@ function isObjectId(id: unknown): id is string {
   return typeof id === "string" && mongoose.Types.ObjectId.isValid(id);
 }
 
+function toObjectId(id: string) {
+  return new Types.ObjectId(id);
+}
+
+function byIdFilter(id: string): ShopOwnerFilter {
+  return { _id: toObjectId(id) };
+}
+
+function mergeFilters(
+  ...filters: Array<ShopOwnerFilter | null | undefined>
+): ShopOwnerFilter {
+  const valid = filters.filter(Boolean) as ShopOwnerFilter[];
+  if (valid.length === 0) return {};
+  if (valid.length === 1) return valid[0];
+  return { $and: valid };
+}
+
 async function cloudinaryDelete(publicId?: string) {
   const pid = String(publicId || "").trim();
   if (!pid) return;
+
   try {
     await cloudinary.uploader.destroy(pid, { resource_type: "image" });
   } catch {
-    // ignore
+    // ignore cloudinary cleanup errors
   }
 }
 
@@ -56,7 +84,6 @@ function uploadToCloud(file: Express.Multer.File, folder: string) {
   });
 }
 
-/** DOC upload (PDF/JPEG/PNG/WEBP) */
 function uploadDocument(file: Express.Multer.File, folder: string) {
   const isImage = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
   const isPdf = file.mimetype === "application/pdf";
@@ -111,18 +138,18 @@ function normTrim(v: any) {
 function buildCreatedBy(u: { sub: string; role: "MASTER_ADMIN" | "MANAGER" }) {
   if (u.role === "MASTER_ADMIN") {
     return {
-      type: "MASTER",
-      id: u.sub,
-      role: u.role,
-      ref: "Master",
+      type: "MASTER" as const,
+      id: toObjectId(u.sub),
+      role: "MASTER_ADMIN" as const,
+      ref: "Master" as const,
     };
   }
 
   return {
-    type: "MANAGER",
-    id: u.sub,
-    role: u.role,
-    ref: "SubAdmin",
+    type: "MANAGER" as const,
+    id: toObjectId(u.sub),
+    role: "MANAGER" as const,
+    ref: "SubAdmin" as const,
   };
 }
 
@@ -182,8 +209,7 @@ async function markExpiredIfNeeded(doc: any) {
   return doc;
 }
 
-/** access filter for admin-side shop owner visibility */
-function buildShopOwnerAccessFilter(user?: JwtUser) {
+function buildShopOwnerAccessFilter(user?: JwtUser): ShopOwnerFilter | null {
   if (!user?.role) return null;
 
   if (user.role === "MASTER_ADMIN") {
@@ -202,6 +228,23 @@ function buildShopOwnerAccessFilter(user?: JwtUser) {
   }
 
   return null;
+}
+
+function generateOtp(length = 6) {
+  let otp = "";
+  for (let i = 0; i < length; i++) {
+    otp += Math.floor(Math.random() * 10).toString();
+  }
+  return otp;
+}
+
+function generateResetToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+async function hashText(value: string) {
+  const salt = await bcrypt.genSalt(10);
+  return bcrypt.hash(value, salt);
 }
 
 /** CREATE */
@@ -259,14 +302,13 @@ export async function createShopOwner(req: Request, res: Response) {
     const nMobile = nMobileRaw || undefined;
     const nAdditional = nAdditionalRaw || undefined;
 
-    const or: any[] = [{ email: nEmail }, { username: nUsername }];
-
+    const or: ShopOwnerFilter[] = [{ email: nEmail }, { username: nUsername }];
     if (nMobile) or.push({ mobile: nMobile });
     if (nAdditional) or.push({ additionalNumber: nAdditional });
 
-    const exists = await ShopOwnerModel.findOne({ $or: or }).select(
-      "_id email username mobile additionalNumber"
-    );
+    const exists = await ShopOwnerModel.findOne({
+      $or: or,
+    }).select("_id email username mobile additionalNumber");
 
     if (exists) {
       let duplicateField = "email/username/mobile/additionalNumber";
@@ -274,10 +316,7 @@ export async function createShopOwner(req: Request, res: Response) {
       if ((exists as any).email === nEmail) duplicateField = "email";
       else if ((exists as any).username === nUsername) duplicateField = "username";
       else if (nMobile && (exists as any).mobile === nMobile) duplicateField = "mobile";
-      else if (
-        nAdditional &&
-        (exists as any).additionalNumber === nAdditional
-      ) {
+      else if (nAdditional && (exists as any).additionalNumber === nAdditional) {
         duplicateField = "additionalNumber";
       }
 
@@ -290,7 +329,12 @@ export async function createShopOwner(req: Request, res: Response) {
     const createdBy =
       u.role === "MASTER_ADMIN" || u.role === "MANAGER"
         ? buildCreatedBy(u as { sub: string; role: "MASTER_ADMIN" | "MANAGER" })
-        : { type: "MANAGER", id: u.sub, role: "MANAGER", ref: "SubAdmin" };
+        : {
+            type: "MANAGER" as const,
+            id: toObjectId(u.sub),
+            role: "MANAGER" as const,
+            ref: "SubAdmin" as const,
+          };
 
     const payload: any = {
       name: nName,
@@ -378,10 +422,11 @@ export async function getShopOwner(req: Request, res: Response) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const query =
-      Object.keys(accessFilter).length === 0
-        ? { _id: req.params.id }
-        : { _id: req.params.id, ...accessFilter };
+    if (!isObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+
+    const query = mergeFilters(byIdFilter(req.params.id), accessFilter);
 
     let doc = await ShopOwnerModel.findOne(query)
       .populate({
@@ -416,12 +461,16 @@ export async function updateShopOwner(req: Request, res: Response) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const findQuery =
-      Object.keys(accessFilter).length === 0
-        ? { _id: req.params.id }
-        : { _id: req.params.id, ...accessFilter };
+    if (!isObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
 
-    const doc = await ShopOwnerModel.findOne(findQuery);
+    const findQuery = mergeFilters(byIdFilter(req.params.id), accessFilter);
+
+    const doc = await ShopOwnerModel.findOne(findQuery).select(
+      "+refreshTokenHash +pinResetOtpHash +pinResetTokenHash +pinHash"
+    );
+
     if (!doc) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
@@ -555,6 +604,12 @@ export async function updateShopOwner(req: Request, res: Response) {
 
     if (pin !== undefined && normTrim(pin)) {
       (doc as any).pinHash = await hashPin(normTrim(pin));
+      (doc as any).refreshTokenHash = "";
+      (doc as any).pinResetOtpHash = "";
+      (doc as any).pinResetOtpExpiresAt = null;
+      (doc as any).pinResetAttempts = 0;
+      (doc as any).pinResetTokenHash = "";
+      (doc as any).pinResetTokenExpiresAt = null;
     }
 
     if (businessTypes !== undefined) {
@@ -630,10 +685,11 @@ export async function deleteShopOwner(req: Request, res: Response) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const findQuery =
-      Object.keys(accessFilter).length === 0
-        ? { _id: req.params.id }
-        : { _id: req.params.id, ...accessFilter };
+    if (!isObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+
+    const findQuery = mergeFilters(byIdFilter(req.params.id), accessFilter);
 
     const doc = await ShopOwnerModel.findOne(findQuery);
     if (!doc) {
@@ -662,10 +718,11 @@ export async function toggleShopOwnerActive(req: Request, res: Response) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const findQuery =
-      Object.keys(accessFilter).length === 0
-        ? { _id: req.params.id }
-        : { _id: req.params.id, ...accessFilter };
+    if (!isObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+
+    const findQuery = mergeFilters(byIdFilter(req.params.id), accessFilter);
 
     const doc = await ShopOwnerModel.findOne(findQuery);
     if (!doc) {
@@ -714,7 +771,11 @@ export async function shopOwnerLogin(req: Request, res: Response) {
     const nLogin = normLower(login);
 
     const doc = await ShopOwnerModel.findOne({
-      $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(login) }],
+      $or: [
+        { email: nLogin },
+        { username: nLogin },
+        { mobile: normTrim(login) },
+      ],
     }).select("+pinHash +refreshTokenHash");
 
     if (!doc) {
@@ -752,6 +813,7 @@ export async function shopOwnerLogin(req: Request, res: Response) {
       success: true,
       accessToken,
       refreshToken,
+      role: "SHOP_OWNER",
       data: safe(doc),
     });
   } catch (err: any) {
@@ -799,8 +861,19 @@ export async function shopOwnerRefresh(req: Request, res: Response) {
       return res.status(401).json({ success: false, message: "Session expired" });
     }
 
-    const accessToken = signAccessToken(String(doc._id), "SHOP_OWNER");
-    return res.json({ success: true, accessToken });
+    const newAccessToken = signAccessToken(String(doc._id), "SHOP_OWNER");
+    const newRefreshToken = signRefreshToken(String(doc._id), "SHOP_OWNER");
+
+    (doc as any).refreshTokenHash = await bcrypt.hash(newRefreshToken, 10);
+    await doc.save();
+
+    return res.json({
+      success: true,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      role: "SHOP_OWNER",
+      data: safe(doc),
+    });
   } catch {
     return res.status(401).json({
       success: false,
@@ -809,20 +882,380 @@ export async function shopOwnerRefresh(req: Request, res: Response) {
   }
 }
 
+/** FORGOT PIN */
+export async function forgotShopOwnerPin(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue) {
+      return res.status(400).json({
+        success: false,
+        message: "login/email/username/mobile required",
+      });
+    }
+
+    const nLogin = normLower(loginValue);
+
+    const doc = await ShopOwnerModel.findOne({
+      $or: [
+        { email: nLogin },
+        { username: nLogin },
+        { mobile: normTrim(loginValue) },
+      ],
+    }).select("+pinResetOtpHash +pinResetTokenHash");
+
+    if (!doc) {
+      return res.json({
+        success: true,
+        message: "If the account exists, a PIN reset OTP has been sent",
+      });
+    }
+
+    if ((doc as any).isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Account not activated",
+      });
+    }
+
+    if (isExpired((doc as any).validTo)) {
+      (doc as any).isActive = false;
+      await doc.save();
+
+      return res.status(403).json({
+        success: false,
+        message: "Account expired. Contact admin.",
+      });
+    }
+
+    const otp = generateOtp(6);
+
+    (doc as any).pinResetOtpHash = await hashText(otp);
+    (doc as any).pinResetOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    (doc as any).pinResetAttempts = 0;
+    (doc as any).pinResetTokenHash = "";
+    (doc as any).pinResetTokenExpiresAt = null;
+
+    await doc.save();
+
+    await sendShopOwnerPinResetOtpEmail((doc as any).email, otp, (doc as any).name);
+
+    return res.json({
+      success: true,
+      message: "If the account exists, a PIN reset OTP has been sent",
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/** VERIFY RESET OTP */
+export async function verifyShopOwnerPinOtp(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile, otp } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+      otp?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "login and otp required",
+      });
+    }
+
+    const nLogin = normLower(loginValue);
+
+    const doc = await ShopOwnerModel.findOne({
+      $or: [
+        { email: nLogin },
+        { username: nLogin },
+        { mobile: normTrim(loginValue) },
+      ],
+    }).select("+pinResetOtpHash +pinResetTokenHash");
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    if (!(doc as any).pinResetOtpHash || !(doc as any).pinResetOtpExpiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: "No reset request found",
+      });
+    }
+
+    if (new Date((doc as any).pinResetOtpExpiresAt).getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP expired",
+      });
+    }
+
+    if (((doc as any).pinResetAttempts || 0) >= 5) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many invalid attempts. Request a new OTP.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(
+      String(otp).trim(),
+      (doc as any).pinResetOtpHash
+    );
+
+    if (!isMatch) {
+      (doc as any).pinResetAttempts = ((doc as any).pinResetAttempts || 0) + 1;
+      await doc.save();
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
+
+    const resetToken = generateResetToken();
+
+    (doc as any).pinResetTokenHash = await hashText(resetToken);
+    (doc as any).pinResetTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    (doc as any).pinResetOtpHash = "";
+    (doc as any).pinResetOtpExpiresAt = null;
+    (doc as any).pinResetAttempts = 0;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "OTP verified",
+      resetToken,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/** RESET PIN */
+export async function resetShopOwnerPin(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile, resetToken, newPin } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+      resetToken?: string;
+      newPin?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue || !resetToken || !newPin) {
+      return res.status(400).json({
+        success: false,
+        message: "login, resetToken and newPin required",
+      });
+    }
+
+    const pinValue = normTrim(newPin);
+
+    if (!/^\d{4,8}$/.test(pinValue)) {
+      return res.status(400).json({
+        success: false,
+        message: "PIN must be 4 to 8 digits",
+      });
+    }
+
+    const nLogin = normLower(loginValue);
+
+    const doc = await ShopOwnerModel.findOne({
+      $or: [
+        { email: nLogin },
+        { username: nLogin },
+        { mobile: normTrim(loginValue) },
+      ],
+    }).select(
+      "+pinHash +refreshTokenHash +pinResetOtpHash +pinResetTokenHash"
+    );
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    if (!(doc as any).pinResetTokenHash || !(doc as any).pinResetTokenExpiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset session not found",
+      });
+    }
+
+    if (new Date((doc as any).pinResetTokenExpiresAt).getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset token expired",
+      });
+    }
+
+    const isValidToken = await bcrypt.compare(
+      String(resetToken).trim(),
+      (doc as any).pinResetTokenHash
+    );
+
+    if (!isValidToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid reset token",
+      });
+    }
+
+    (doc as any).pinHash = await hashPin(pinValue);
+    (doc as any).refreshTokenHash = "";
+
+    (doc as any).pinResetOtpHash = "";
+    (doc as any).pinResetOtpExpiresAt = null;
+    (doc as any).pinResetAttempts = 0;
+    (doc as any).pinResetTokenHash = "";
+    (doc as any).pinResetTokenExpiresAt = null;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "PIN reset successful. Please login again.",
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/** CHANGE PIN (SELF) */
+export async function changeShopOwnerPin(req: Request, res: Response) {
+  try {
+    const u = (req as any).user as JwtUser;
+
+    if (!u?.sub) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const { currentPin, newPin } = req.body as {
+      currentPin?: string;
+      newPin?: string;
+    };
+
+    if (!currentPin || !newPin) {
+      return res.status(400).json({
+        success: false,
+        message: "currentPin and newPin required",
+      });
+    }
+
+    const pinValue = normTrim(newPin);
+
+    if (!/^\d{4,8}$/.test(pinValue)) {
+      return res.status(400).json({
+        success: false,
+        message: "PIN must be 4 to 8 digits",
+      });
+    }
+
+    const doc = await ShopOwnerModel.findById(u.sub).select(
+      "+pinHash +refreshTokenHash +pinResetOtpHash +pinResetTokenHash"
+    );
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    const ok = await bcrypt.compare(normTrim(currentPin), (doc as any).pinHash);
+
+    if (!ok) {
+      return res.status(400).json({
+        success: false,
+        message: "Current PIN is incorrect",
+      });
+    }
+
+    (doc as any).pinHash = await hashPin(pinValue);
+    (doc as any).refreshTokenHash = "";
+
+    (doc as any).pinResetOtpHash = "";
+    (doc as any).pinResetOtpExpiresAt = null;
+    (doc as any).pinResetAttempts = 0;
+    (doc as any).pinResetTokenHash = "";
+    (doc as any).pinResetTokenExpiresAt = null;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "PIN changed successfully. Please login again.",
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
 /** LOGOUT */
 export async function shopOwnerLogout(req: Request, res: Response) {
-  const u = (req as any).user as { sub?: string; role?: string };
+  try {
+    const u = (req as any).user as { sub?: string; role?: string };
 
-  if (!u?.sub) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!u?.sub) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    await ShopOwnerModel.updateOne(
+      { _id: toObjectId(u.sub) },
+      { $unset: { refreshTokenHash: 1 } }
+    );
+
+    return res.json({ success: true, message: "Logged out" });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
   }
-
-  await ShopOwnerModel.updateOne(
-    { _id: u.sub },
-    { $unset: { refreshTokenHash: 1 } }
-  );
-
-  return res.json({ success: true, message: "Logged out" });
 }
 
 /** ME */
@@ -968,10 +1401,7 @@ export async function masterShopOwnerAvatarUpload(req: Request, res: Response) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const query =
-      Object.keys(accessFilter).length === 0
-        ? { _id: id }
-        : { _id: id, ...accessFilter };
+    const query = mergeFilters(byIdFilter(id), accessFilter);
 
     const doc = await ShopOwnerModel.findOne(query).select("avatarUrl avatarPublicId");
     if (!doc) {
@@ -1017,10 +1447,7 @@ export async function masterShopOwnerAvatarRemove(req: Request, res: Response) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const query =
-      Object.keys(accessFilter).length === 0
-        ? { _id: id }
-        : { _id: id, ...accessFilter };
+    const query = mergeFilters(byIdFilter(id), accessFilter);
 
     const doc = await ShopOwnerModel.findOne(query).select("avatarUrl avatarPublicId");
     if (!doc) {
@@ -1064,10 +1491,7 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const query =
-      Object.keys(accessFilter).length === 0
-        ? { _id: id }
-        : { _id: id, ...accessFilter };
+    const query = mergeFilters(byIdFilter(id), accessFilter);
 
     const doc = await ShopOwnerModel.findOne(query).select(
       "idProof gstCertificate udyamCertificate"
@@ -1086,6 +1510,7 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
     if (idProofFile) {
       const up = await uploadDocument(idProofFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
       const oldPid = (doc as any).idProof?.publicId;
+
       (doc as any).idProof = {
         url: up.url,
         publicId: up.publicId,
@@ -1093,12 +1518,14 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
         fileName: up.fileName,
         bytes: up.bytes,
       };
+
       if (oldPid) await cloudinaryDelete(oldPid);
     }
 
     if (gstFile) {
       const up = await uploadDocument(gstFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
       const oldPid = (doc as any).gstCertificate?.publicId;
+
       (doc as any).gstCertificate = {
         url: up.url,
         publicId: up.publicId,
@@ -1106,12 +1533,14 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
         fileName: up.fileName,
         bytes: up.bytes,
       };
+
       if (oldPid) await cloudinaryDelete(oldPid);
     }
 
     if (udyamFile) {
       const up = await uploadDocument(udyamFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
       const oldPid = (doc as any).udyamCertificate?.publicId;
+
       (doc as any).udyamCertificate = {
         url: up.url,
         publicId: up.publicId,
@@ -1119,6 +1548,7 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
         fileName: up.fileName,
         bytes: up.bytes,
       };
+
       if (oldPid) await cloudinaryDelete(oldPid);
     }
 
@@ -1159,10 +1589,7 @@ export async function masterShopOwnerDocsRemove(req: Request, res: Response) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const query =
-      Object.keys(accessFilter).length === 0
-        ? { _id: id }
-        : { _id: id, ...accessFilter };
+    const query = mergeFilters(byIdFilter(id), accessFilter);
 
     const doc = await ShopOwnerModel.findOne(query).select(
       "idProof gstCertificate udyamCertificate"

@@ -10,6 +10,11 @@ import {
   deleteStaff,
   staffLogin,
   staffLogout,
+  staffRefreshToken,
+  forgotStaffPin,
+  verifyStaffPinOtp,
+  resetStaffPin,
+  changeStaffPin,
 } from "../controllers/staff.controller";
 
 const router = Router();
@@ -19,15 +24,58 @@ const uploadFields = upload.fields([
   { name: "idproof", maxCount: 1 },
 ]);
 
-// ✅ AUTH
+/* ===================== AUTH ===================== */
 router.post("/login", staffLogin);
-router.post("/logout", auth, requireRoles("STAFF", "SUPERVISOR"), staffLogout); // adjust allowed roles
+router.post("/refresh-token", staffRefreshToken);
+router.post("/forgot-pin", forgotStaffPin);
+router.post("/verify-pin-otp", verifyStaffPinOtp);
+router.post("/reset-pin", resetStaffPin);
+router.post("/logout", auth, requireRoles("STAFF", "SUPERVISOR"), staffLogout);
 
-// ✅ CRUD (MASTER + MANAGER only)
-router.post("/", auth, requireRoles("MASTER_ADMIN", "MANAGER"), uploadFields, createStaff);
-router.get("/", auth, requireRoles("MASTER_ADMIN", "MANAGER"), listStaff);
-router.get("/:id", auth, requireRoles("MASTER_ADMIN", "MANAGER", "STAFF", "SUPERVISOR"), getStaff);
-router.put("/:id", auth, requireRoles("MASTER_ADMIN", "MANAGER", "STAFF", "SUPERVISOR"), uploadFields, updateStaff);
-router.delete("/:id", auth, requireRoles("MASTER_ADMIN", "MANAGER"), deleteStaff);
+/* ===================== SELF ===================== */
+router.put(
+  "/me/change-pin",
+  auth,
+  requireRoles("STAFF", "SUPERVISOR"),
+  changeStaffPin
+);
+
+/* ===================== CRUD ===================== */
+router.post(
+  "/",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER"),
+  uploadFields,
+  createStaff
+);
+
+router.get(
+  "/",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER", "STAFF", "SUPERVISOR"),
+  listStaff
+);
+
+router.get(
+  "/:id",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER", "STAFF", "SUPERVISOR"),
+  getStaff
+);
+
+router.put(
+  "/:id",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER"),
+  uploadFields,
+  updateStaff
+);
+
+router.delete(
+  "/:id",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER"),
+  deleteStaff
+);
 
 export default router;

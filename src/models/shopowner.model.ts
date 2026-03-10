@@ -1,5 +1,12 @@
 // src/models/shopowner.model.ts
-import { Schema, model, models } from "mongoose";
+import {
+  Schema,
+  model,
+  models,
+  type InferSchemaType,
+  type HydratedDocument,
+  type Model,
+} from "mongoose";
 import { DocSchema } from "./shared/doc.schema";
 
 const AddressSchema = new Schema(
@@ -183,6 +190,33 @@ const ShopOwnerSchema = new Schema(
       type: CreatedBySchema,
       required: true,
     },
+
+    pinResetOtpHash: {
+      type: String,
+      default: "",
+      select: false,
+    },
+
+    pinResetOtpExpiresAt: {
+      type: Date,
+      default: null,
+    },
+
+    pinResetAttempts: {
+      type: Number,
+      default: 0,
+    },
+
+    pinResetTokenHash: {
+      type: String,
+      default: "",
+      select: false,
+    },
+
+    pinResetTokenExpiresAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -190,12 +224,15 @@ const ShopOwnerSchema = new Schema(
   }
 );
 
-/**
- * Helpful compound indexes for controller queries
- */
 ShopOwnerSchema.index({ "createdBy.role": 1, "createdBy.ref": 1 });
 ShopOwnerSchema.index({ createdAt: -1 });
 ShopOwnerSchema.index({ isActive: 1, validTo: 1 });
 
-export const ShopOwnerModel =
-  models.ShopOwner || model("ShopOwner", ShopOwnerSchema);
+export type ShopOwner = InferSchemaType<typeof ShopOwnerSchema>;
+export type ShopOwnerDocument = HydratedDocument<ShopOwner>;
+
+export const ShopOwnerModel: Model<ShopOwner> =
+  (models.ShopOwner as Model<ShopOwner>) ||
+  model<ShopOwner>("ShopOwner", ShopOwnerSchema);
+
+export default ShopOwnerModel;

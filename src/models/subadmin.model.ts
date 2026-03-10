@@ -3,8 +3,20 @@ import { Schema, model } from "mongoose";
 const subAdminSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
-    username: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    username: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
 
     avatarUrl: { type: String, default: "" },
     avatarPublicId: { type: String, default: "" },
@@ -22,6 +34,14 @@ const subAdminSchema = new Schema(
     idProofPublicId: { type: String, default: "" },
 
     isActive: { type: Boolean, default: true },
+
+    // forgot / reset pin
+    pinResetOtpHash: { type: String, default: "" },
+    pinResetOtpExpiresAt: { type: Date, default: null },
+    pinResetAttempts: { type: Number, default: 0 },
+
+    pinResetTokenHash: { type: String, default: "" },
+    pinResetTokenExpiresAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

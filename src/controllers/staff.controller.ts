@@ -1,11 +1,12 @@
-// src/controllers/staff.controller.ts
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 
 import { StaffModel, STAFF_ROLES } from "../models/staff.model";
 import cloudinary, { cloudinaryDelete } from "../config/cloudinary";
 import { hashPin } from "../utils/pin";
+import { sendStaffPinResetOtpEmail } from "../utils/sendStaffPinResetOtpEmail";
 import {
   signAccessToken,
   signRefreshToken,
@@ -13,7 +14,11 @@ import {
   type Role,
 } from "../utils/jwt";
 
-type JwtUser = { sub: string; role: "MASTER_ADMIN" | "MANAGER" };
+type JwtUser = {
+  sub: string;
+  role: "MASTER_ADMIN" | "MANAGER" | "STAFF" | "SUPERVISOR";
+};
+
 type StaffRole = (typeof STAFF_ROLES)[number];
 
 const CLOUD_FOLDER_STAFF_AVATAR = "Shop Stack/staff/avatar";
@@ -24,8 +29,15 @@ const CLOUD_FOLDER_STAFF_IDPROOF = "Shop Stack/staff/idproof";
 function safe(doc: any) {
   const o = doc?.toObject ? doc.toObject() : doc;
   if (!o) return o;
+
   delete o.pinHash;
   delete o.refreshTokenHash;
+  delete o.pinResetOtpHash;
+  delete o.pinResetOtpExpiresAt;
+  delete o.pinResetAttempts;
+  delete o.pinResetTokenHash;
+  delete o.pinResetTokenExpiresAt;
+
   return o;
 }
 
@@ -45,23 +57,35 @@ function buildCreatedBy(u: JwtUser) {
   if (u.role === "MASTER_ADMIN") {
     return { type: "MASTER", id: u.sub, role: u.role, ref: "Master" };
   }
-  return { type: "MANAGER", id: u.sub, role: u.role, ref: "SubAdmin" };
+  return { type: "MANAGER", id: u.sub, role: "MANAGER", ref: "SubAdmin" };
 }
 
 function canMutate(u: JwtUser, staffDoc: any) {
   if (!u?.role || !u?.sub) return false;
 
-  // MASTER can manage all
   if (u.role === "MASTER_ADMIN") return true;
 
-  // MANAGER only their created docs
   const createdById =
     staffDoc?.createdBy?.id?.toString?.() ??
     String(staffDoc?.createdBy?.id || "");
+
   return u.role === "MANAGER" && createdById === u.sub;
 }
 
-/* ---------------- cloudinary helpers ---------------- */
+function canViewOrSelf(u: JwtUser, staffDoc: any) {
+  if (!u?.role || !u?.sub) return false;
+
+  if (u.role === "MASTER_ADMIN") return true;
+
+  if (u.role === "MANAGER") {
+    const createdById =
+      staffDoc?.createdBy?.id?.toString?.() ??
+      String(staffDoc?.createdBy?.id || "");
+    return createdById === u.sub;
+  }
+
+  return String(staffDoc?._id) === String(u.sub);
+}
 
 async function uploadToCloud(file: Express.Multer.File, folder: string) {
   if (!file?.buffer) {
@@ -82,14 +106,13 @@ async function uploadToCloud(file: Express.Multer.File, folder: string) {
 async function safeCloudDelete(publicId?: string) {
   const pid = String(publicId ?? "").trim();
   if (!pid) return;
+
   try {
-    await cloudinaryDelete(pid); // should call uploader.destroy(pid, {resource_type:"image"})
+    await cloudinaryDelete(pid);
   } catch {
     // ignore failures
   }
 }
-
-/* ---------------- StaffRole normalization ---------------- */
 
 const STAFF_ROLE_SET = new Set<StaffRole>(["STAFF", "SUPERVISOR"]);
 
@@ -103,8 +126,6 @@ function normalizeStaffRoles(input: any): StaffRole[] {
   const out = arr.map((x) => toStaffRole(x)).filter(Boolean);
   return out.length ? out : ["STAFF"];
 }
-
-/* ---------------- duplicate helpers ---------------- */
 
 function buildDuplicateOr(input: {
   email?: any;
@@ -129,19 +150,33 @@ function buildDuplicateOr(input: {
 function conflictMessage(exists: any, n: ReturnType<typeof buildDuplicateOr>) {
   const conflicts: string[] = [];
   if (n.nEmail && exists?.email === n.nEmail) conflicts.push("email");
-  if (n.nUsername && exists?.username === n.nUsername)
-    conflicts.push("username");
+  if (n.nUsername && exists?.username === n.nUsername) conflicts.push("username");
   if (n.nMobile && exists?.mobile === n.nMobile) conflicts.push("mobile");
-  if (n.nAdditional && exists?.additionalNumber === n.nAdditional)
+  if (n.nAdditional && exists?.additionalNumber === n.nAdditional) {
     conflicts.push("additionalNumber");
+  }
   return `Already exists: ${conflicts.join(", ") || "duplicate"}`;
+}
+
+function generateOtp(length = 6) {
+  let otp = "";
+  for (let i = 0; i < length; i++) {
+    otp += Math.floor(Math.random() * 10).toString();
+  }
+  return otp;
+}
+
+function generateResetToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+async function hashText(value: string) {
+  const salt = await bcrypt.genSalt(10);
+  return bcrypt.hash(value, salt);
 }
 
 /* ---------------- CRUD ---------------- */
 
-/**
- * ✅ CREATE Staff/Supervisor
- */
 export async function createStaff(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -150,9 +185,7 @@ export async function createStaff(req: Request, res: Response) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
     if (!isObjectId(u.sub)) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid user id" });
+      return res.status(401).json({ success: false, message: "Invalid user id" });
     }
 
     const {
@@ -178,7 +211,6 @@ export async function createStaff(req: Request, res: Response) {
       });
     }
 
-    // ✅ field-wise duplicate check
     const dup = buildDuplicateOr({ email, username, mobile, additionalNumber });
     if (dup.or.length) {
       const exists = await StaffModel.findOne({ $or: dup.or }).select(
@@ -212,25 +244,18 @@ export async function createStaff(req: Request, res: Response) {
       idProofPublicId = up.publicId;
     }
 
-    const roleArr = normalizeStaffRoles(roles);
-    const createdBy = buildCreatedBy(u);
-
     const doc = await StaffModel.create({
       name: normTrim(name),
       username: dup.nUsername || normLower(username),
       email: dup.nEmail || normLower(email),
-
       pinHash: await hashPin(normTrim(pin)),
-      roles: roleArr,
-
+      roles: normalizeStaffRoles(roles),
       mobile: dup.nMobile || "",
       additionalNumber: dup.nAdditional || "",
-
       avatarUrl,
       avatarPublicId,
       idProofUrl,
       idProofPublicId,
-
       address: {
         state: normTrim(state),
         district: normTrim(district),
@@ -239,12 +264,19 @@ export async function createStaff(req: Request, res: Response) {
         street: normTrim(street),
         pincode: normTrim(pincode),
       },
-
-      createdBy,
+      createdBy: buildCreatedBy(u),
     });
 
     return res.status(201).json({ success: true, data: safe(doc) });
   } catch (err: any) {
+    if (err?.code === 11000) {
+      const key = Object.keys(err.keyPattern || err.keyValue || {})[0] || "field";
+      return res.status(409).json({
+        success: false,
+        message: `${key} already exists`,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -253,9 +285,6 @@ export async function createStaff(req: Request, res: Response) {
   }
 }
 
-/**
- * ✅ LIST (MASTER sees all, MANAGER sees only theirs)
- */
 export async function listStaff(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -263,7 +292,9 @@ export async function listStaff(req: Request, res: Response) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
 
-    const filter = u.role === "MASTER_ADMIN" ? {} : { "createdBy.id": u.sub };
+    const filter =
+      u.role === "MASTER_ADMIN" ? {} : u.role === "MANAGER" ? { "createdBy.id": u.sub } : { _id: u.sub };
+
     const items = await StaffModel.find(filter).sort({ createdAt: -1 });
 
     return res.json({ success: true, data: items.map(safe) });
@@ -276,9 +307,6 @@ export async function listStaff(req: Request, res: Response) {
   }
 }
 
-/**
- * ✅ GET by ID (MASTER any, MANAGER only theirs)
- */
 export async function getStaff(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -292,7 +320,7 @@ export async function getStaff(req: Request, res: Response) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
-    if (!canMutate(u, doc)) {
+    if (!canViewOrSelf(u, doc)) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
@@ -306,9 +334,6 @@ export async function getStaff(req: Request, res: Response) {
   }
 }
 
-/**
- * ✅ UPDATE (MASTER any, MANAGER only theirs)
- */
 export async function updateStaff(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -317,7 +342,7 @@ export async function updateStaff(req: Request, res: Response) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
 
-    const doc = await StaffModel.findById(req.params.id);
+    const doc = await StaffModel.findById(req.params.id).select("+refreshTokenHash");
     if (!doc) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
@@ -343,7 +368,6 @@ export async function updateStaff(req: Request, res: Response) {
       isActive,
     } = req.body as any;
 
-    // ✅ field-wise duplicate check (exclude self)
     const incoming = {
       email: email !== undefined ? email : doc.email,
       username: username !== undefined ? username : doc.username,
@@ -388,13 +412,15 @@ export async function updateStaff(req: Request, res: Response) {
     if (username !== undefined) doc.username = normLower(username);
     if (email !== undefined) doc.email = normLower(email);
     if (mobile !== undefined) doc.mobile = normTrim(mobile);
-    if (additionalNumber !== undefined)
+    if (additionalNumber !== undefined) {
       doc.additionalNumber = normTrim(additionalNumber);
+    }
 
     if (roles !== undefined) doc.roles = normalizeStaffRoles(roles);
 
     if (pin !== undefined && normTrim(pin)) {
       doc.pinHash = await hashPin(normTrim(pin));
+      doc.refreshTokenHash = "";
     }
 
     if (!doc.address) doc.address = {} as any;
@@ -412,6 +438,14 @@ export async function updateStaff(req: Request, res: Response) {
     await doc.save();
     return res.json({ success: true, data: safe(doc) });
   } catch (err: any) {
+    if (err?.code === 11000) {
+      const key = Object.keys(err.keyPattern || err.keyValue || {})[0] || "field";
+      return res.status(409).json({
+        success: false,
+        message: `${key} already exists`,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -420,9 +454,6 @@ export async function updateStaff(req: Request, res: Response) {
   }
 }
 
-/**
- * ✅ DELETE (MASTER any, MANAGER only theirs)
- */
 export async function deleteStaff(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -461,28 +492,32 @@ export async function staffLogin(req: Request, res: Response) {
     const { login, pin } = req.body as { login?: string; pin?: string };
 
     if (!login || !pin) {
-      return res
-        .status(400)
-        .json({ success: false, message: "login and pin required" });
+      return res.status(400).json({
+        success: false,
+        message: "login and pin required",
+      });
     }
 
     const nLogin = String(login).trim().toLowerCase();
 
     const doc = await StaffModel.findOne({
       $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(login) }],
-    });
+    }).select("+refreshTokenHash");
 
-    if (!doc)
+    if (!doc) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
-    if (doc.isActive === false)
+    }
+    if (doc.isActive === false) {
       return res.status(403).json({ success: false, message: "Account disabled" });
+    }
 
     const ok = await bcrypt.compare(normTrim(pin), doc.pinHash);
-    if (!ok)
+    if (!ok) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
 
     const staffRole = toStaffRole(doc.roles?.[0], "STAFF");
-    const jwtRole: Role = staffRole; // Role union includes STAFF/SUPERVISOR
+    const jwtRole: Role = staffRole;
 
     const accessToken = signAccessToken(String(doc._id), jwtRole);
     const refreshToken = signRefreshToken(String(doc._id), jwtRole);
@@ -495,12 +530,82 @@ export async function staffLogin(req: Request, res: Response) {
       message: "Login success",
       accessToken,
       refreshToken,
+      role: jwtRole,
+      roles: doc.roles || [jwtRole],
       data: safe(doc),
     });
   } catch (err: any) {
     return res.status(500).json({
       success: false,
       message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+export async function staffRefreshToken(req: Request, res: Response) {
+  try {
+    const { refreshToken } = req.body as { refreshToken?: string };
+
+    if (!refreshToken) {
+      return res.status(400).json({
+        success: false,
+        message: "refreshToken required",
+      });
+    }
+
+    const decoded = verifyRefreshToken(refreshToken) as any;
+    if (!decoded?.sub) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid refresh token",
+      });
+    }
+
+    const doc = await StaffModel.findById(decoded.sub).select("+refreshTokenHash");
+    if (!doc || !doc.refreshTokenHash) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid refresh token",
+      });
+    }
+
+    const tokenMatch = await bcrypt.compare(refreshToken, doc.refreshTokenHash);
+    if (!tokenMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid refresh token",
+      });
+    }
+
+    if (doc.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Account disabled",
+      });
+    }
+
+    const staffRole = toStaffRole(doc.roles?.[0], "STAFF");
+    const jwtRole: Role = staffRole;
+
+    const newAccessToken = signAccessToken(String(doc._id), jwtRole);
+    const newRefreshToken = signRefreshToken(String(doc._id), jwtRole);
+
+    doc.refreshTokenHash = await bcrypt.hash(newRefreshToken, 10);
+    await doc.save();
+
+    return res.json({
+      success: true,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      role: jwtRole,
+      roles: doc.roles || [jwtRole],
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired refresh token",
       error: err?.message,
     });
   }
@@ -515,6 +620,322 @@ export async function staffLogout(req: Request, res: Response) {
 
     await StaffModel.updateOne({ _id: u.sub }, { $unset: { refreshTokenHash: 1 } });
     return res.json({ success: true, message: "Logged out" });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+/* ---------------- FORGOT / RESET PIN ---------------- */
+
+export async function forgotStaffPin(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue) {
+      return res.status(400).json({
+        success: false,
+        message: "login/email/username/mobile required",
+      });
+    }
+
+    const nLogin = String(loginValue).trim().toLowerCase();
+
+    const doc = await StaffModel.findOne({
+      $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(loginValue) }],
+    }).select("+pinResetOtpHash +pinResetTokenHash");
+
+    if (!doc) {
+      return res.json({
+        success: true,
+        message: "If the account exists, a PIN reset OTP has been sent",
+      });
+    }
+
+    if (doc.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Account disabled",
+      });
+    }
+
+    const otp = generateOtp(6);
+
+    doc.pinResetOtpHash = await hashText(otp);
+    doc.pinResetOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    doc.pinResetAttempts = 0;
+    doc.pinResetTokenHash = "";
+    doc.pinResetTokenExpiresAt = null;
+
+    await doc.save();
+
+    await sendStaffPinResetOtpEmail(doc.email, otp, doc.name);
+
+    return res.json({
+      success: true,
+      message: "If the account exists, a PIN reset OTP has been sent",
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+export async function verifyStaffPinOtp(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile, otp } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+      otp?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "login and otp required",
+      });
+    }
+
+    const nLogin = String(loginValue).trim().toLowerCase();
+
+    const doc = await StaffModel.findOne({
+      $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(loginValue) }],
+    }).select("+pinResetOtpHash +pinResetTokenHash");
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    if (!doc.pinResetOtpHash || !doc.pinResetOtpExpiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: "No reset request found",
+      });
+    }
+
+    if (doc.pinResetOtpExpiresAt.getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP expired",
+      });
+    }
+
+    if ((doc.pinResetAttempts || 0) >= 5) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many invalid attempts. Request a new OTP.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(String(otp).trim(), doc.pinResetOtpHash);
+    if (!isMatch) {
+      doc.pinResetAttempts = (doc.pinResetAttempts || 0) + 1;
+      await doc.save();
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
+
+    const resetToken = generateResetToken();
+
+    doc.pinResetTokenHash = await hashText(resetToken);
+    doc.pinResetTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    doc.pinResetOtpHash = "";
+    doc.pinResetOtpExpiresAt = null;
+    doc.pinResetAttempts = 0;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "OTP verified",
+      resetToken,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+export async function resetStaffPin(req: Request, res: Response) {
+  try {
+    const { login, email, username, mobile, resetToken, newPin } = req.body as {
+      login?: string;
+      email?: string;
+      username?: string;
+      mobile?: string;
+      resetToken?: string;
+      newPin?: string;
+    };
+
+    const loginValue = login || email || username || mobile;
+
+    if (!loginValue || !resetToken || !newPin) {
+      return res.status(400).json({
+        success: false,
+        message: "login, resetToken and newPin required",
+      });
+    }
+
+    const pinValue = normTrim(newPin);
+    if (!/^\d{4,8}$/.test(pinValue)) {
+      return res.status(400).json({
+        success: false,
+        message: "PIN must be 4 to 8 digits",
+      });
+    }
+
+    const nLogin = String(loginValue).trim().toLowerCase();
+
+    const doc = await StaffModel.findOne({
+      $or: [{ email: nLogin }, { username: nLogin }, { mobile: normTrim(loginValue) }],
+    }).select("+refreshTokenHash +pinResetTokenHash");
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    if (!doc.pinResetTokenHash || !doc.pinResetTokenExpiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset session not found",
+      });
+    }
+
+    if (doc.pinResetTokenExpiresAt.getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset token expired",
+      });
+    }
+
+    const isValidToken = await bcrypt.compare(
+      String(resetToken).trim(),
+      doc.pinResetTokenHash
+    );
+
+    if (!isValidToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid reset token",
+      });
+    }
+
+    doc.pinHash = await hashPin(pinValue);
+    doc.refreshTokenHash = "";
+
+    doc.pinResetOtpHash = "";
+    doc.pinResetOtpExpiresAt = null;
+    doc.pinResetAttempts = 0;
+    doc.pinResetTokenHash = "";
+    doc.pinResetTokenExpiresAt = null;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "PIN reset successful. Please login again.",
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+export async function changeStaffPin(req: Request, res: Response) {
+  try {
+    const u = (req as any).user as { sub?: string; role?: string };
+
+    if (!u?.sub) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const { currentPin, newPin } = req.body as {
+      currentPin?: string;
+      newPin?: string;
+    };
+
+    if (!currentPin || !newPin) {
+      return res.status(400).json({
+        success: false,
+        message: "currentPin and newPin required",
+      });
+    }
+
+    const pinValue = normTrim(newPin);
+    if (!/^\d{4,8}$/.test(pinValue)) {
+      return res.status(400).json({
+        success: false,
+        message: "PIN must be 4 to 8 digits",
+      });
+    }
+
+    const doc = await StaffModel.findById(u.sub).select("+refreshTokenHash");
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    const ok = await bcrypt.compare(normTrim(currentPin), doc.pinHash);
+    if (!ok) {
+      return res.status(400).json({
+        success: false,
+        message: "Current PIN is incorrect",
+      });
+    }
+
+    doc.pinHash = await hashPin(pinValue);
+    doc.refreshTokenHash = "";
+
+    doc.pinResetOtpHash = "";
+    doc.pinResetOtpExpiresAt = null;
+    doc.pinResetAttempts = 0;
+    doc.pinResetTokenHash = "";
+    doc.pinResetTokenExpiresAt = null;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "PIN changed successfully. Please login again.",
+    });
   } catch (err: any) {
     return res.status(500).json({
       success: false,

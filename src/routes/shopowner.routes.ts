@@ -20,6 +20,12 @@ import {
   masterShopOwnerAvatarRemove,
   masterShopOwnerDocsUpload,
   masterShopOwnerDocsRemove,
+
+  // ✅ new
+  forgotShopOwnerPin,
+  verifyShopOwnerPinOtp,
+  resetShopOwnerPin,
+  changeShopOwnerPin,
 } from "../controllers/shopowner.controller";
 
 const router = Router();
@@ -33,9 +39,17 @@ const uploadFields = upload.fields([
 router.post("/login", shopOwnerLogin);
 router.post("/refresh", shopOwnerRefresh);
 
+// ✅ forgot/reset pin
+router.post("/forgot-pin", forgotShopOwnerPin);
+router.post("/verify-pin-otp", verifyShopOwnerPinOtp);
+router.post("/reset-pin", resetShopOwnerPin);
+
 /* ===================== SHOP_OWNER (SELF) ===================== */
 router.post("/logout", auth, requireRoles("SHOP_OWNER"), shopOwnerLogout);
 router.get("/me", auth, requireRoles("SHOP_OWNER"), getShopOwnerMe);
+
+// ✅ self change pin
+router.put("/me/change-pin", auth, requireRoles("SHOP_OWNER"), changeShopOwnerPin);
 
 router.post(
   "/me/avatar",
