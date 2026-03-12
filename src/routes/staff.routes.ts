@@ -89,14 +89,14 @@ router.post(
 router.get(
   "/",
   auth,
-  requireRoles("MASTER_ADMIN", "MANAGER", "STAFF", "SUPERVISOR"),
+  requireRoles("MASTER_ADMIN", "MANAGER"),
   listStaff
 );
 
 router.get(
   "/:id",
   auth,
-  requireRoles("MASTER_ADMIN", "MANAGER", "STAFF", "SUPERVISOR"),
+  requireRoles("MASTER_ADMIN", "MANAGER"),
   getStaff
 );
 

@@ -29,6 +29,8 @@ const masterSchema = new Schema(
     role: { type: String, default: "MASTER_ADMIN" },
     isActive: { type: Boolean, default: true },
     googleSub: { type: String, default: "" }, 
+    pinResetOtp: { type: String, default: "" },
+pinResetOtpExpiresAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

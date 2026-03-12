@@ -8,9 +8,11 @@ import {
   masterGetById,
   masterUpdate,
   masterDelete,
-  masterGoogleLogin,
   masterAvatarRemove,
   masterAvatarUpload,
+  masterForgotPin,
+masterResetPin,
+masterChangePin,
 } from "../controllers/master.controller";
 import { auth } from "../middlewares/auth";
 import { requireRole } from "../middlewares/requireRole";
@@ -22,8 +24,9 @@ const router = Router();
 router.post("/login", masterLogin);
 router.post("/refresh", masterRefresh);
 router.post("/logout", masterLogout);
-router.post("/google", masterGoogleLogin);
-
+router.post("/forgot-pin", masterForgotPin);
+router.post("/reset-pin", masterResetPin);
+router.post("/change-pin", auth, requireRole("MASTER_ADMIN"), masterChangePin);
 /* ---------- PROTECTED (MASTER) ---------- */
 router.get("/me", auth, masterMe);
 
