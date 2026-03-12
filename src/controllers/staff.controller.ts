@@ -175,6 +175,254 @@ async function hashText(value: string) {
   return bcrypt.hash(value, salt);
 }
 
+/* ---------------- SELF PROFILE ---------------- */
+
+export async function getMyStaffProfile(req: Request, res: Response) {
+  try {
+    const u = (req as any).user as JwtUser;
+
+    if (!u?.sub || !u?.role) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (!["STAFF", "SUPERVISOR"].includes(u.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
+    const doc = await StaffModel.findById(u.sub);
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+export async function updateMyStaffProfile(req: Request, res: Response) {
+  try {
+    const u = (req as any).user as JwtUser;
+
+    if (!u?.sub || !u?.role) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (!["STAFF", "SUPERVISOR"].includes(u.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
+    const doc = await StaffModel.findById(u.sub).select("+refreshTokenHash");
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    const {
+      name,
+      username,
+      email,
+      mobile,
+      additionalNumber,
+      state,
+      district,
+      taluk,
+      area,
+      street,
+      pincode,
+    } = req.body as any;
+
+    const incoming = {
+      email: email !== undefined ? email : doc.email,
+      username: username !== undefined ? username : doc.username,
+      mobile: mobile !== undefined ? mobile : doc.mobile,
+      additionalNumber:
+        additionalNumber !== undefined ? additionalNumber : doc.additionalNumber,
+    };
+
+    const dup = buildDuplicateOr(incoming);
+
+    if (dup.or.length) {
+      const exists = await StaffModel.findOne({
+        _id: { $ne: doc._id },
+        $or: dup.or,
+      }).select("_id email username mobile additionalNumber");
+
+      if (exists) {
+        return res.status(409).json({
+          success: false,
+          message: conflictMessage(exists, dup),
+        });
+      }
+    }
+
+    if (name !== undefined) doc.name = normTrim(name);
+    if (username !== undefined) doc.username = normLower(username);
+    if (email !== undefined) doc.email = normLower(email);
+    if (mobile !== undefined) doc.mobile = normTrim(mobile);
+    if (additionalNumber !== undefined) {
+      doc.additionalNumber = normTrim(additionalNumber);
+    }
+
+    if (!doc.address) doc.address = {} as any;
+    if (state !== undefined) doc.address.state = normTrim(state);
+    if (district !== undefined) doc.address.district = normTrim(district);
+    if (taluk !== undefined) doc.address.taluk = normTrim(taluk);
+    if (area !== undefined) doc.address.area = normTrim(area);
+    if (street !== undefined) doc.address.street = normTrim(street);
+    if (pincode !== undefined) doc.address.pincode = normTrim(pincode);
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "Profile updated successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    if (err?.code === 11000) {
+      const key = Object.keys(err.keyPattern || err.keyValue || {})[0] || "field";
+      return res.status(409).json({
+        success: false,
+        message: `${key} already exists`,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+export async function uploadMyStaffAvatar(req: Request, res: Response) {
+  try {
+    const u = (req as any).user as JwtUser;
+
+    if (!u?.sub || !u?.role) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (!["STAFF", "SUPERVISOR"].includes(u.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
+    const doc = await StaffModel.findById(u.sub);
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        message: "Avatar file required",
+      });
+    }
+
+    await safeCloudDelete(doc.avatarPublicId);
+
+    const up = await uploadToCloud(file, CLOUD_FOLDER_STAFF_AVATAR);
+    doc.avatarUrl = up.url;
+    doc.avatarPublicId = up.publicId;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "Avatar uploaded successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
+export async function removeMyStaffAvatar(req: Request, res: Response) {
+  try {
+    const u = (req as any).user as JwtUser;
+
+    if (!u?.sub || !u?.role) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (!["STAFF", "SUPERVISOR"].includes(u.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
+    const doc = await StaffModel.findById(u.sub);
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    await safeCloudDelete(doc.avatarPublicId);
+
+    doc.avatarUrl = "";
+    doc.avatarPublicId = "";
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "Avatar removed successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err?.message,
+    });
+  }
+}
+
 /* ---------------- CRUD ---------------- */
 
 export async function createStaff(req: Request, res: Response) {
@@ -293,7 +541,11 @@ export async function listStaff(req: Request, res: Response) {
     }
 
     const filter =
-      u.role === "MASTER_ADMIN" ? {} : u.role === "MANAGER" ? { "createdBy.id": u.sub } : { _id: u.sub };
+      u.role === "MASTER_ADMIN"
+        ? {}
+        : u.role === "MANAGER"
+        ? { "createdBy.id": u.sub }
+        : { _id: u.sub };
 
     const items = await StaffModel.find(filter).sort({ createdAt: -1 });
 

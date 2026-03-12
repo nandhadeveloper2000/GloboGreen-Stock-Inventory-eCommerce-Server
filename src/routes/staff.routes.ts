@@ -15,6 +15,12 @@ import {
   verifyStaffPinOtp,
   resetStaffPin,
   changeStaffPin,
+
+  // NEW
+  getMyStaffProfile,
+  updateMyStaffProfile,
+  uploadMyStaffAvatar,
+  removeMyStaffAvatar,
 } from "../controllers/staff.controller";
 
 const router = Router();
@@ -23,6 +29,8 @@ const uploadFields = upload.fields([
   { name: "avatar", maxCount: 1 },
   { name: "idproof", maxCount: 1 },
 ]);
+
+const avatarUpload = upload.single("avatar");
 
 /* ===================== AUTH ===================== */
 router.post("/login", staffLogin);
@@ -33,6 +41,35 @@ router.post("/reset-pin", resetStaffPin);
 router.post("/logout", auth, requireRoles("STAFF", "SUPERVISOR"), staffLogout);
 
 /* ===================== SELF ===================== */
+router.get(
+  "/me",
+  auth,
+  requireRoles("STAFF", "SUPERVISOR"),
+  getMyStaffProfile
+);
+
+router.put(
+  "/me",
+  auth,
+  requireRoles("STAFF", "SUPERVISOR"),
+  updateMyStaffProfile
+);
+
+router.post(
+  "/me/avatar",
+  auth,
+  requireRoles("STAFF", "SUPERVISOR"),
+  avatarUpload,
+  uploadMyStaffAvatar
+);
+
+router.delete(
+  "/me/avatar",
+  auth,
+  requireRoles("STAFF", "SUPERVISOR"),
+  removeMyStaffAvatar
+);
+
 router.put(
   "/me/change-pin",
   auth,
