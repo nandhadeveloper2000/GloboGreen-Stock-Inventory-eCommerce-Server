@@ -1,8 +1,6 @@
 import { Resend } from "resend";
 import { env } from "../config/env";
 
-const resend = new Resend(env.RESEND_API_KEY);
-
 type SendEmailOptions = {
   to: string;
   subject: string;
@@ -10,14 +8,23 @@ type SendEmailOptions = {
   html?: string;
 };
 
+// Create client safely
+let resend: Resend | null = null;
+
+if (env.RESEND_API_KEY) {
+  resend = new Resend(env.RESEND_API_KEY);
+} else {
+  console.warn("⚠️ RESEND_API_KEY not configured. Email service disabled.");
+}
+
 export async function sendEmail({
   to,
   subject,
   text,
   html,
 }: SendEmailOptions) {
-  if (!env.RESEND_API_KEY) {
-    throw new Error("RESEND_API_KEY is missing");
+  if (!resend) {
+    throw new Error("Email service not configured. Missing RESEND_API_KEY.");
   }
 
   if (!env.RESEND_FROM_EMAIL) {
