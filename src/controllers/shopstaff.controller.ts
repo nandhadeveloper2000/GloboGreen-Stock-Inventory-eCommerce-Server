@@ -9,7 +9,7 @@ import { ShopOwnerModel } from "../models/shopowner.model";
 
 import cloudinary, { cloudinaryDelete } from "../config/cloudinary";
 import { hashPin } from "../utils/pin";
-import { sendShopStaffPinResetOtpEmail } from "../utils/sendShopStaffPinResetOtpEmail";
+import { sendShopStaffPinResetOtpEmail } from "../utils/pinResetEmails";
 import {
   signAccessToken,
   signRefreshToken,

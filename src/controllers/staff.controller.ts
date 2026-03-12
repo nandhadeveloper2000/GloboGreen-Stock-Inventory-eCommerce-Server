@@ -6,7 +6,7 @@ import crypto from "crypto";
 import { StaffModel, STAFF_ROLES } from "../models/staff.model";
 import cloudinary, { cloudinaryDelete } from "../config/cloudinary";
 import { hashPin } from "../utils/pin";
-import { sendStaffPinResetOtpEmail } from "../utils/sendStaffPinResetOtpEmail";
+import { sendStaffPinResetOtpEmail } from "../utils/pinResetEmails";
 import {
   signAccessToken,
   signRefreshToken,

@@ -5,7 +5,7 @@ import mongoose, { Types } from "mongoose";
 import crypto from "crypto";
 import { ShopOwnerModel } from "../models/shopowner.model";
 import { hashPin } from "../utils/pin";
-import { sendShopOwnerPinResetOtpEmail } from "../utils/sendShopOwnerPinResetOtpEmail";
+import { sendShopOwnerPinResetOtpEmail } from "../utils/pinResetEmails";
 import {
   signAccessToken,
   signRefreshToken,

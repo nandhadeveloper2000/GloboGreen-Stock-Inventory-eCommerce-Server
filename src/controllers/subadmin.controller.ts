@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { SubAdminModel } from "../models/subadmin.model";
 import cloudinary, { cloudinaryDelete } from "../config/cloudinary";
 import { hashPin } from "../utils/pin";
-import { sendPinResetOtpEmail } from "../utils/sendPinResetOtpEmail";
+import { sendPinResetOtpEmail } from "../utils/pinResetEmails";
 import {
   signAccessToken,
   signRefreshToken,
@@ -100,8 +100,8 @@ function normalizeRoles(input: any): Role[] {
   const arr = Array.isArray(input)
     ? input
     : input
-    ? [input]
-    : [DEFAULT_SUBADMIN_ROLE];
+      ? [input]
+      : [DEFAULT_SUBADMIN_ROLE];
 
   const out = arr.map((x) => toRole(x)).filter(Boolean);
   return out.length ? out : [DEFAULT_SUBADMIN_ROLE];
@@ -619,8 +619,12 @@ export async function forgotSubAdminPin(req: Request, res: Response) {
 
     await doc.save();
 
-    await sendPinResetOtpEmail(doc.email, otp, doc.name);
-
+    await sendPinResetOtpEmail({
+      to: doc.email,
+      otp,
+      name: doc.name,
+      variant: "subadmin",
+    });
     return res.json({
       success: true,
       message: "If the account exists, a PIN reset OTP has been sent",
