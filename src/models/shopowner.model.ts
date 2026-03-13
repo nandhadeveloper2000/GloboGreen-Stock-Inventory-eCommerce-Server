@@ -1,4 +1,3 @@
-// src/models/shopowner.model.ts
 import {
   Schema,
   model,
@@ -142,11 +141,6 @@ const ShopOwnerSchema = new Schema(
       },
     ],
 
-    businessTypes: {
-      type: [String],
-      default: [],
-    },
-
     shopControl: {
       type: String,
       enum: ["ALL_IN_ONE_ECOMMERCE", "INVENTORY_ONLY"],
@@ -155,16 +149,6 @@ const ShopOwnerSchema = new Schema(
     },
 
     idProof: {
-      type: DocSchema,
-      default: () => ({}),
-    },
-
-    gstCertificate: {
-      type: DocSchema,
-      default: () => ({}),
-    },
-
-    udyamCertificate: {
       type: DocSchema,
       default: () => ({}),
     },

@@ -1,4 +1,3 @@
-// src/controllers/shopowner.controller.ts
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import mongoose, { Types } from "mongoose";
@@ -14,7 +13,11 @@ import {
 import cloudinary from "../config/cloudinary";
 import streamifier from "streamifier";
 
-type JwtUser = { sub?: string; role?: string };
+type JwtUser = {
+  sub?: string;
+  role?: string;
+};
+
 type ShopOwnerFilter = Record<string, any>;
 
 function safe(doc: any) {
@@ -60,7 +63,7 @@ async function cloudinaryDelete(publicId?: string) {
   try {
     await cloudinary.uploader.destroy(pid, { resource_type: "image" });
   } catch {
-    // ignore cloudinary cleanup errors
+    // ignore cleanup errors
   }
 }
 
@@ -85,11 +88,11 @@ function uploadToCloud(file: Express.Multer.File, folder: string) {
 }
 
 function uploadDocument(file: Express.Multer.File, folder: string) {
-  const isImage = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
+  const isImage = /^image\/(jpeg|jpg|png|webp)$/.test(file.mimetype);
   const isPdf = file.mimetype === "application/pdf";
 
   if (!isImage && !isPdf) {
-    throw new Error("Only PDF/JPEG/PNG/WEBP allowed");
+    throw new Error("Only PDF/JPEG/JPG/PNG/WEBP allowed");
   }
 
   return new Promise<{
@@ -247,7 +250,7 @@ async function hashText(value: string) {
   return bcrypt.hash(value, salt);
 }
 
-/** CREATE */
+/* ===================== CREATE ===================== */
 export async function createShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -267,7 +270,6 @@ export async function createShopOwner(req: Request, res: Response) {
       pin,
       mobile,
       additionalNumber,
-      businessTypes,
       shopControl,
       state,
       district,
@@ -341,11 +343,6 @@ export async function createShopOwner(req: Request, res: Response) {
       username: nUsername,
       email: nEmail,
       pinHash: await hashPin(normTrim(pin)),
-      businessTypes: Array.isArray(businessTypes)
-        ? businessTypes
-        : businessTypes
-        ? [String(businessTypes)]
-        : [],
       shopControl: control,
       address: {
         state: normTrim(state),
@@ -388,7 +385,7 @@ export async function createShopOwner(req: Request, res: Response) {
   }
 }
 
-/** LIST */
+/* ===================== LIST ===================== */
 export async function listShopOwners(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -412,7 +409,7 @@ export async function listShopOwners(req: Request, res: Response) {
   }
 }
 
-/** GET ONE */
+/* ===================== GET ONE ===================== */
 export async function getShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -431,7 +428,8 @@ export async function getShopOwner(req: Request, res: Response) {
     let doc = await ShopOwnerModel.findOne(query)
       .populate({
         path: "shopIds",
-        select: "name isActive shopAddress frontImageUrl createdAt",
+        select:
+          "name businessType isActive shopAddress frontImageUrl gstCertificate udyamCertificate createdAt",
       })
       .lean();
 
@@ -451,7 +449,7 @@ export async function getShopOwner(req: Request, res: Response) {
   }
 }
 
-/** UPDATE */
+/* ===================== UPDATE ===================== */
 export async function updateShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -482,7 +480,6 @@ export async function updateShopOwner(req: Request, res: Response) {
       pin,
       mobile,
       additionalNumber,
-      businessTypes,
       shopIds,
       shopControl,
       state,
@@ -612,14 +609,6 @@ export async function updateShopOwner(req: Request, res: Response) {
       (doc as any).pinResetTokenExpiresAt = null;
     }
 
-    if (businessTypes !== undefined) {
-      (doc as any).businessTypes = Array.isArray(businessTypes)
-        ? businessTypes
-        : businessTypes
-        ? [String(businessTypes)]
-        : [];
-    }
-
     if (!(doc as any).address) {
       (doc as any).address = {};
     }
@@ -648,7 +637,8 @@ export async function updateShopOwner(req: Request, res: Response) {
     const populated = await ShopOwnerModel.findById(doc._id)
       .populate({
         path: "shopIds",
-        select: "name isActive address frontImageUrl createdAt",
+        select:
+          "name businessType isActive shopAddress frontImageUrl gstCertificate udyamCertificate createdAt",
       })
       .lean();
 
@@ -675,7 +665,7 @@ export async function updateShopOwner(req: Request, res: Response) {
   }
 }
 
-/** DELETE */
+/* ===================== DELETE ===================== */
 export async function deleteShopOwner(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -708,7 +698,7 @@ export async function deleteShopOwner(req: Request, res: Response) {
   }
 }
 
-/** ACTIVATE / DEACTIVATE */
+/* ===================== ACTIVATE / DEACTIVATE ===================== */
 export async function toggleShopOwnerActive(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -757,7 +747,7 @@ export async function toggleShopOwnerActive(req: Request, res: Response) {
   }
 }
 
-/** LOGIN */
+/* ===================== LOGIN ===================== */
 export async function shopOwnerLogin(req: Request, res: Response) {
   try {
     const { login, pin } = req.body as any;
@@ -825,7 +815,7 @@ export async function shopOwnerLogin(req: Request, res: Response) {
   }
 }
 
-/** REFRESH */
+/* ===================== REFRESH ===================== */
 export async function shopOwnerRefresh(req: Request, res: Response) {
   try {
     const { refreshToken } = req.body as any;
@@ -882,7 +872,7 @@ export async function shopOwnerRefresh(req: Request, res: Response) {
   }
 }
 
-/** FORGOT PIN */
+/* ===================== FORGOT PIN ===================== */
 export async function forgotShopOwnerPin(req: Request, res: Response) {
   try {
     const { login, email, username, mobile } = req.body as {
@@ -945,7 +935,11 @@ export async function forgotShopOwnerPin(req: Request, res: Response) {
 
     await doc.save();
 
-    await sendShopOwnerPinResetOtpEmail((doc as any).email, otp, (doc as any).name);
+    await sendShopOwnerPinResetOtpEmail(
+      (doc as any).email,
+      otp,
+      (doc as any).name
+    );
 
     return res.json({
       success: true,
@@ -960,7 +954,7 @@ export async function forgotShopOwnerPin(req: Request, res: Response) {
   }
 }
 
-/** VERIFY RESET OTP */
+/* ===================== VERIFY RESET OTP ===================== */
 export async function verifyShopOwnerPinOtp(req: Request, res: Response) {
   try {
     const { login, email, username, mobile, otp } = req.body as {
@@ -1058,7 +1052,7 @@ export async function verifyShopOwnerPinOtp(req: Request, res: Response) {
   }
 }
 
-/** RESET PIN */
+/* ===================== RESET PIN ===================== */
 export async function resetShopOwnerPin(req: Request, res: Response) {
   try {
     const { login, email, username, mobile, resetToken, newPin } = req.body as {
@@ -1157,7 +1151,7 @@ export async function resetShopOwnerPin(req: Request, res: Response) {
   }
 }
 
-/** CHANGE PIN (SELF) */
+/* ===================== CHANGE PIN (SELF) ===================== */
 export async function changeShopOwnerPin(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1234,7 +1228,7 @@ export async function changeShopOwnerPin(req: Request, res: Response) {
   }
 }
 
-/** LOGOUT */
+/* ===================== LOGOUT ===================== */
 export async function shopOwnerLogout(req: Request, res: Response) {
   try {
     const u = (req as any).user as { sub?: string; role?: string };
@@ -1258,7 +1252,7 @@ export async function shopOwnerLogout(req: Request, res: Response) {
   }
 }
 
-/** ME */
+/* ===================== ME ===================== */
 export async function getShopOwnerMe(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1274,7 +1268,8 @@ export async function getShopOwnerMe(req: Request, res: Response) {
     let doc = await ShopOwnerModel.findById(u.sub)
       .populate({
         path: "shopIds",
-        select: "name isActive address frontImageUrl createdAt",
+        select:
+          "name businessType isActive shopAddress frontImageUrl gstCertificate udyamCertificate createdAt",
       })
       .lean();
 
@@ -1294,7 +1289,7 @@ export async function getShopOwnerMe(req: Request, res: Response) {
   }
 }
 
-/** SELF AVATAR UPLOAD */
+/* ===================== SELF AVATAR UPLOAD ===================== */
 export async function shopOwnerAvatarUpload(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1341,7 +1336,7 @@ export async function shopOwnerAvatarUpload(req: Request, res: Response) {
   }
 }
 
-/** SELF AVATAR REMOVE */
+/* ===================== SELF AVATAR REMOVE ===================== */
 export async function shopOwnerAvatarRemove(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1381,7 +1376,7 @@ export async function shopOwnerAvatarRemove(req: Request, res: Response) {
   }
 }
 
-/** ADMIN AVATAR UPLOAD */
+/* ===================== ADMIN AVATAR UPLOAD ===================== */
 export async function masterShopOwnerAvatarUpload(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1432,7 +1427,7 @@ export async function masterShopOwnerAvatarUpload(req: Request, res: Response) {
   }
 }
 
-/** ADMIN AVATAR REMOVE */
+/* ===================== ADMIN AVATAR REMOVE ===================== */
 export async function masterShopOwnerAvatarRemove(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1476,7 +1471,7 @@ export async function masterShopOwnerAvatarRemove(req: Request, res: Response) {
   }
 }
 
-/** ADMIN DOCS UPLOAD */
+/* ===================== ADMIN ID PROOF UPLOAD ===================== */
 export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1493,70 +1488,40 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
 
     const query = mergeFilters(byIdFilter(id), accessFilter);
 
-    const doc = await ShopOwnerModel.findOne(query).select(
-      "idProof gstCertificate udyamCertificate"
-    );
+    const doc = await ShopOwnerModel.findOne(query).select("idProof");
 
     if (!doc) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
     const files = req.files as Record<string, Express.Multer.File[]> | undefined;
-
     const idProofFile = files?.idProof?.[0];
-    const gstFile = files?.gstCertificate?.[0];
-    const udyamFile = files?.udyamCertificate?.[0];
 
-    if (idProofFile) {
-      const up = await uploadDocument(idProofFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
-      const oldPid = (doc as any).idProof?.publicId;
-
-      (doc as any).idProof = {
-        url: up.url,
-        publicId: up.publicId,
-        mimeType: up.mimeType,
-        fileName: up.fileName,
-        bytes: up.bytes,
-      };
-
-      if (oldPid) await cloudinaryDelete(oldPid);
+    if (!idProofFile) {
+      return res.status(400).json({
+        success: false,
+        message: "idProof file required",
+      });
     }
 
-    if (gstFile) {
-      const up = await uploadDocument(gstFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
-      const oldPid = (doc as any).gstCertificate?.publicId;
+    const up = await uploadDocument(idProofFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
+    const oldPid = (doc as any).idProof?.publicId;
 
-      (doc as any).gstCertificate = {
-        url: up.url,
-        publicId: up.publicId,
-        mimeType: up.mimeType,
-        fileName: up.fileName,
-        bytes: up.bytes,
-      };
+    (doc as any).idProof = {
+      url: up.url,
+      publicId: up.publicId,
+      mimeType: up.mimeType,
+      fileName: up.fileName,
+      bytes: up.bytes,
+    };
 
-      if (oldPid) await cloudinaryDelete(oldPid);
-    }
-
-    if (udyamFile) {
-      const up = await uploadDocument(udyamFile, CLOUD_FOLDER_SHOPOWNER_DOCS);
-      const oldPid = (doc as any).udyamCertificate?.publicId;
-
-      (doc as any).udyamCertificate = {
-        url: up.url,
-        publicId: up.publicId,
-        mimeType: up.mimeType,
-        fileName: up.fileName,
-        bytes: up.bytes,
-      };
-
-      if (oldPid) await cloudinaryDelete(oldPid);
-    }
+    if (oldPid) await cloudinaryDelete(oldPid);
 
     await doc.save();
 
     return res.json({
       success: true,
-      message: "Documents updated",
+      message: "ID proof updated",
       data: safe(doc),
     });
   } catch (err: any) {
@@ -1568,7 +1533,7 @@ export async function masterShopOwnerDocsUpload(req: Request, res: Response) {
   }
 }
 
-/** ADMIN DOC REMOVE */
+/* ===================== ADMIN ID PROOF REMOVE ===================== */
 export async function masterShopOwnerDocsRemove(req: Request, res: Response) {
   try {
     const u = (req as any).user as JwtUser;
@@ -1579,8 +1544,7 @@ export async function masterShopOwnerDocsRemove(req: Request, res: Response) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
 
-    const allowed = new Set(["idProof", "gstCertificate", "udyamCertificate"]);
-    if (!allowed.has(key)) {
+    if (key !== "idProof") {
       return res.status(400).json({ success: false, message: "Invalid key" });
     }
 
@@ -1591,22 +1555,20 @@ export async function masterShopOwnerDocsRemove(req: Request, res: Response) {
 
     const query = mergeFilters(byIdFilter(id), accessFilter);
 
-    const doc = await ShopOwnerModel.findOne(query).select(
-      "idProof gstCertificate udyamCertificate"
-    );
+    const doc = await ShopOwnerModel.findOne(query).select("idProof");
 
     if (!doc) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
-    const cur = (doc as any)[key];
+    const cur = (doc as any).idProof;
     const pid = cur?.publicId;
 
     if (pid) {
       await cloudinaryDelete(pid);
     }
 
-    (doc as any)[key] = {
+    (doc as any).idProof = {
       url: "",
       publicId: "",
       mimeType: "",
@@ -1618,7 +1580,7 @@ export async function masterShopOwnerDocsRemove(req: Request, res: Response) {
 
     return res.json({
       success: true,
-      message: `${key} removed`,
+      message: "idProof removed",
       data: safe(doc),
     });
   } catch (err: any) {

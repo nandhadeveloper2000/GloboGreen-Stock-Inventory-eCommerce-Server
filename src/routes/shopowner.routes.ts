@@ -1,4 +1,3 @@
-// src/routes/shopowner.routes.ts
 import { Router } from "express";
 import { auth } from "../middlewares/auth.middleware";
 import { requireRoles } from "../middlewares/rbac.middleware";
@@ -20,8 +19,6 @@ import {
   masterShopOwnerAvatarRemove,
   masterShopOwnerDocsUpload,
   masterShopOwnerDocsRemove,
-
-  // ✅ new
   forgotShopOwnerPin,
   verifyShopOwnerPinOtp,
   resetShopOwnerPin,
@@ -30,26 +27,34 @@ import {
 
 const router = Router();
 
-const uploadFields = upload.fields([
-  { name: "avatar", maxCount: 1 },
-  { name: "idproof", maxCount: 1 },
-]);
-
-/* ===================== AUTH (PUBLIC) ===================== */
+/* ===================== PUBLIC AUTH ===================== */
 router.post("/login", shopOwnerLogin);
 router.post("/refresh", shopOwnerRefresh);
-
-// ✅ forgot/reset pin
 router.post("/forgot-pin", forgotShopOwnerPin);
 router.post("/verify-pin-otp", verifyShopOwnerPinOtp);
 router.post("/reset-pin", resetShopOwnerPin);
 
-/* ===================== SHOP_OWNER (SELF) ===================== */
-router.post("/logout", auth, requireRoles("SHOP_OWNER"), shopOwnerLogout);
-router.get("/me", auth, requireRoles("SHOP_OWNER"), getShopOwnerMe);
+/* ===================== SELF ===================== */
+router.post(
+  "/logout",
+  auth,
+  requireRoles("SHOP_OWNER"),
+  shopOwnerLogout
+);
 
-// ✅ self change pin
-router.put("/me/change-pin", auth, requireRoles("SHOP_OWNER"), changeShopOwnerPin);
+router.get(
+  "/me",
+  auth,
+  requireRoles("SHOP_OWNER"),
+  getShopOwnerMe
+);
+
+router.put(
+  "/me/change-pin",
+  auth,
+  requireRoles("SHOP_OWNER"),
+  changeShopOwnerPin
+);
 
 router.post(
   "/me/avatar",
@@ -71,7 +76,6 @@ router.post(
   "/",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  uploadFields,
   createShopOwner
 );
 
@@ -112,7 +116,7 @@ router.delete(
   deleteShopOwner
 );
 
-/* ===================== ADMIN AVATAR (BY ID) ===================== */
+/* ===================== ADMIN AVATAR ===================== */
 router.put(
   "/:id/avatar",
   auth,
@@ -128,16 +132,12 @@ router.delete(
   masterShopOwnerAvatarRemove
 );
 
-/* ===================== ADMIN DOCS (BY ID) ===================== */
+/* ===================== ADMIN ID PROOF ===================== */
 router.put(
   "/:id/docs",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  upload.fields([
-    { name: "idProof", maxCount: 1 },
-    { name: "gstCertificate", maxCount: 1 },
-    { name: "udyamCertificate", maxCount: 1 },
-  ]),
+  upload.fields([{ name: "idProof", maxCount: 1 }]),
   masterShopOwnerDocsUpload
 );
 
