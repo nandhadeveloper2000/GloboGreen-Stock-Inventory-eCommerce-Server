@@ -24,24 +24,27 @@ const CreatedBySchema = new Schema(
   {
     type: {
       type: String,
-      enum: ["MASTER", "MANAGER"],
+      enum: ["MASTER", "MANAGER", "SUPERVISOR", "STAFF"],
       required: true,
       trim: true,
     },
+
     id: {
       type: Schema.Types.ObjectId,
       required: true,
       refPath: "createdBy.ref",
     },
+
     role: {
       type: String,
-      enum: ["MASTER_ADMIN", "MANAGER"],
+      enum: ["MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"],
       required: true,
       trim: true,
     },
+
     ref: {
       type: String,
-      enum: ["Master", "SubAdmin"],
+      enum: ["Master", "SubAdmin", "Supervisor", "Staff"],
       required: true,
       trim: true,
     },

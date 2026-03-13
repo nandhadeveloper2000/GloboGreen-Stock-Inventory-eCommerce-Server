@@ -16,10 +16,32 @@ const AddressSchema = new Schema(
 
 const CreatedBySchema = new Schema(
   {
-    type: { type: String, enum: ["SHOPOWNER", "SHOPMANAGER"], required: true },
-    id: { type: Schema.Types.ObjectId, required: true, refPath: "createdBy.ref" },
-    role: { type: String, enum: ["SHOP_OWNER", "SHOP_MANAGER"], required: true },
-    ref: { type: String, enum: ["Shopowner", "Shopmanager"], required: true },
+    type: {
+      type: String,
+      enum: ["SHOPOWNER", "SHOPMANAGER", "SHOPSUPERVISOR"],
+      required: true,
+      trim: true,
+    },
+
+    id: {
+      type: Schema.Types.ObjectId,
+      required: true,
+      refPath: "createdBy.ref",
+    },
+
+    role: {
+      type: String,
+      enum: ["SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR"],
+      required: true,
+      trim: true,
+    },
+
+    ref: {
+      type: String,
+      enum: ["ShopOwner", "ShopManager", "ShopSupervisor"],
+      required: true,
+      trim: true,
+    },
   },
   { _id: false }
 );
