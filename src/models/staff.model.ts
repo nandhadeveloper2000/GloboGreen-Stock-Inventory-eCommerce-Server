@@ -17,7 +17,7 @@ const CreatedBySchema = new Schema(
     },
     role: {
       type: String,
-      enum: ["MASTER_ADMIN", "MANAGER", "SUPERVISOR"],
+      enum: ["MASTER_ADMIN", "  ", "SUPERVISOR"],
       required: true,
       trim: true,
     },
