@@ -37,14 +37,14 @@ router.put(
   updateCategory
 );
 
-router.patch(
+router.put(
   "/:id/active",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
   toggleCategoryActive
 );
 
-router.patch(
+router.put(
   "/:id/image",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),

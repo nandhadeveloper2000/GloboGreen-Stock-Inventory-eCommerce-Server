@@ -115,14 +115,14 @@ router.delete(
   deleteMasterCategory
 );
 
-router.patch(
+router.put(
   "/:id/active",
   auth,
   requireRoles(...UPDATE_ROLES),
   toggleMasterCategoryActive
 );
 
-router.patch(
+router.put(
   "/:id/image",
   auth,
   requireRoles(...UPDATE_ROLES),
@@ -174,14 +174,14 @@ router.delete(
   deleteCategory
 );
 
-router.patch(
+router.put(
   "/categories/:id/active",
   auth,
   requireRoles(...UPDATE_ROLES),
   toggleCategoryActive
 );
 
-router.patch(
+router.put(
   "/categories/:id/image",
   auth,
   requireRoles(...UPDATE_ROLES),
@@ -233,14 +233,14 @@ router.delete(
   deleteSubCategory
 );
 
-router.patch(
+router.put(
   "/sub-categories/:id/active",
   auth,
   requireRoles(...UPDATE_ROLES),
   toggleSubCategoryActive
 );
 
-router.patch(
+router.put(
   "/sub-categories/:id/image",
   auth,
   requireRoles(...UPDATE_ROLES),
@@ -292,14 +292,14 @@ router.delete(
   deleteBrand
 );
 
-router.patch(
+router.put(
   "/brands/:id/active",
   auth,
   requireRoles(...UPDATE_ROLES),
   toggleBrandActive
 );
 
-router.patch(
+router.put(
   "/brands/:id/image",
   auth,
   requireRoles(...UPDATE_ROLES),
@@ -351,14 +351,14 @@ router.delete(
   deleteModel
 );
 
-router.patch(
+router.put(
   "/models/:id/active",
   auth,
   requireRoles(...UPDATE_ROLES),
   toggleModelActive
 );
 
-router.patch(
+router.put(
   "/models/:id/image",
   auth,
   requireRoles(...UPDATE_ROLES),
