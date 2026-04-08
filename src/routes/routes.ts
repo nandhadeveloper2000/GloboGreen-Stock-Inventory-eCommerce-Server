@@ -39,6 +39,7 @@ router.use("/master-categories", masterCategoryRoutes);
 router.use("/categories", categoryRoutes);
 router.use("/sub-categories", subCategoryRoutes);
 router.use("/brands", brandRoutes);
+router.use("/models", modelRoutes);
 router.use("/shop-catalog-map", shopCatalogMapRoutes);
 router.use("/vendors", vendorGlobalRoutes);
 router.use("/shop-vendor-map", shopVendorMapRoutes);

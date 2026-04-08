@@ -12,7 +12,7 @@ import {
   toggleSubCategoryActive,
   updateSubCategoryImage,
   removeSubCategoryImage,
-} from "../controllers/subCategory.controller";
+} from "../controllers/subcategory.controller";
 
 const router = Router();
 
