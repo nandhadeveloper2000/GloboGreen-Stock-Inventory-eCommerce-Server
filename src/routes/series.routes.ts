@@ -3,47 +3,47 @@ import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
 
 import {
-  createModel,
-  listModels,
-  getModel,
-  updateModel,
-  deleteModel,
-  toggleModelActive,
-} from "../controllers/model.controller";
+  createSeries,
+  listSeries,
+  getSeries,
+  updateSeries,
+  deleteSeries,
+  toggleSeriesActive,
+} from "../controllers/series.controller";
 
 const router = Router();
 
-/* ===================== MODEL ===================== */
+/* ===================== SERIES ===================== */
 
-router.get("/", auth, listModels);
-router.get("/:id", auth, getModel);
+router.get("/", auth, listSeries);
+router.get("/:id", auth, getSeries);
 
 router.post(
   "/",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  createModel
+  createSeries
 );
 
 router.put(
   "/:id",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  updateModel
+  updateSeries
 );
 
 router.put(
   "/:id/active",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  toggleModelActive
+  toggleSeriesActive
 );
 
 router.delete(
   "/:id",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  deleteModel
+  deleteSeries
 );
 
 export default router;

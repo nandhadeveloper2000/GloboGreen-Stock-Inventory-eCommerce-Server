@@ -3,47 +3,47 @@ import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
 
 import {
-  createModel,
-  listModels,
-  getModel,
-  updateModel,
-  deleteModel,
-  toggleModelActive,
-} from "../controllers/model.controller";
+  createCompatible,
+  listCompatibles,
+  getCompatible,
+  updateCompatible,
+  deleteCompatible,
+  toggleCompatibleActive,
+} from "../controllers/compatible.controller";
 
 const router = Router();
 
-/* ===================== MODEL ===================== */
+/* ===================== COMPATIBILITY ===================== */
 
-router.get("/", auth, listModels);
-router.get("/:id", auth, getModel);
+router.get("/", auth, listCompatibles);
+router.get("/:id", auth, getCompatible);
 
 router.post(
   "/",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  createModel
+  createCompatible
 );
 
 router.put(
   "/:id",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  updateModel
+  updateCompatible
 );
 
 router.put(
   "/:id/active",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  toggleModelActive
+  toggleCompatibleActive
 );
 
 router.delete(
   "/:id",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  deleteModel
+  deleteCompatible
 );
 
 export default router;

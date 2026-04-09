@@ -5,13 +5,14 @@ import {
   type InferSchemaType,
   type HydratedDocument,
 } from "mongoose";
+import { ImageSchema } from "./shared/image.schema";
 import { CreatedBySchema } from "./shared/createdBy.schema";
 
-const ModelSchema = new Schema(
+const ProductTypeSchema = new Schema(
   {
-    brandId: {
+    subCategoryId: {
       type: Schema.Types.ObjectId,
-      ref: "Brand",
+      ref: "SubCategory",
       required: true,
       index: true,
     },
@@ -29,6 +30,11 @@ const ModelSchema = new Schema(
       trim: true,
     },
 
+    image: {
+      type: ImageSchema,
+      default: () => ({}),
+    },
+
     isActive: {
       type: Boolean,
       default: true,
@@ -44,9 +50,10 @@ const ModelSchema = new Schema(
   }
 );
 
-ModelSchema.index({ brandId: 1, nameKey: 1 }, { unique: true });
+ProductTypeSchema.index({ subCategoryId: 1, nameKey: 1 }, { unique: true });
 
-export type VehicleModel = InferSchemaType<typeof ModelSchema>;
-export type VehicleModelDocument = HydratedDocument<VehicleModel>;
+export type ProductType = InferSchemaType<typeof ProductTypeSchema>;
+export type ProductTypeDocument = HydratedDocument<ProductType>;
 
-export const ModelModel = models.Model || model("Model", ModelSchema);
+export const ProductTypeModel =
+  models.ProductType || model("ProductType", ProductTypeSchema);

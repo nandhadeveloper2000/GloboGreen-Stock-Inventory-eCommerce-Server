@@ -7,7 +7,7 @@ import {
 } from "mongoose";
 import { CreatedBySchema } from "./shared/createdBy.schema";
 
-const ModelSchema = new Schema(
+const SeriesSchema = new Schema(
   {
     brandId: {
       type: Schema.Types.ObjectId,
@@ -44,9 +44,9 @@ const ModelSchema = new Schema(
   }
 );
 
-ModelSchema.index({ brandId: 1, nameKey: 1 }, { unique: true });
+SeriesSchema.index({ brandId: 1, nameKey: 1 }, { unique: true });
 
-export type VehicleModel = InferSchemaType<typeof ModelSchema>;
-export type VehicleModelDocument = HydratedDocument<VehicleModel>;
+export type Series = InferSchemaType<typeof SeriesSchema>;
+export type SeriesDocument = HydratedDocument<Series>;
 
-export const ModelModel = models.Model || model("Model", ModelSchema);
+export const SeriesModel = models.Series || model("Series", SeriesSchema);

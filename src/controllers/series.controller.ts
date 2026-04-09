@@ -1,8 +1,9 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 
-import { ModelModel } from "../models/model.model";
+import { SeriesModel } from "../models/series.model";
 import { BrandModel } from "../models/brand.model";
+import { ModelModel } from "../models/model.model";
 
 type AuthRole = "MASTER_ADMIN" | "MANAGER" | "SUPERVISOR" | "STAFF";
 
@@ -50,9 +51,9 @@ function buildCreatedBy(user?: AuthUser) {
 }
 
 /* ========================================================================== */
-/*                                 CREATE MODEL                               */
+/*                                CREATE SERIES                               */
 /* ========================================================================== */
-export async function createModel(req: Request, res: Response) {
+export async function createSeries(req: Request, res: Response) {
   try {
     const brandId = norm(req.body?.brandId);
     const name = norm(req.body?.name);
@@ -88,7 +89,7 @@ export async function createModel(req: Request, res: Response) {
 
     const nameKey = keyOf(name);
 
-    const exists = await ModelModel.findOne({
+    const exists = await SeriesModel.findOne({
       brandId,
       nameKey,
     }).lean();
@@ -96,11 +97,11 @@ export async function createModel(req: Request, res: Response) {
     if (exists) {
       return res.status(409).json({
         success: false,
-        message: "Model already exists under this Brand",
+        message: "Series already exists under this Brand",
       });
     }
 
-    const doc = await ModelModel.create({
+    const doc = await SeriesModel.create({
       brandId,
       name,
       nameKey,
@@ -108,35 +109,35 @@ export async function createModel(req: Request, res: Response) {
       createdBy: buildCreatedBy(getAuthUser(req)),
     });
 
-    const populated = await ModelModel.findById(doc._id).populate(
+    const populated = await SeriesModel.findById(doc._id).populate(
       "brandId",
       "name nameKey isActive"
     );
 
     return res.status(201).json({
       success: true,
-      message: "Model created successfully",
+      message: "Series created successfully",
       data: populated,
     });
   } catch (error: any) {
     if (error?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Model already exists under this Brand",
+        message: "Series already exists under this Brand",
       });
     }
 
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to create Model",
+      message: error?.message || "Failed to create Series",
     });
   }
 }
 
 /* ========================================================================== */
-/*                                  LIST MODELS                               */
+/*                                 LIST SERIES                                */
 /* ========================================================================== */
-export async function listModels(req: Request, res: Response) {
+export async function listSeries(req: Request, res: Response) {
   try {
     const q = norm(req.query?.q);
     const brandId = norm(req.query?.brandId);
@@ -163,7 +164,7 @@ export async function listModels(req: Request, res: Response) {
       filter.isActive = String(isActive) === "true";
     }
 
-    const rows = await ModelModel.find(filter)
+    const rows = await SeriesModel.find(filter)
       .populate("brandId", "name nameKey isActive")
       .sort({ nameKey: 1 })
       .limit(500);
@@ -175,15 +176,15 @@ export async function listModels(req: Request, res: Response) {
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to fetch Models",
+      message: error?.message || "Failed to fetch Series",
     });
   }
 }
 
 /* ========================================================================== */
-/*                                   GET MODEL                                */
+/*                                  GET SERIES                                */
 /* ========================================================================== */
-export async function getModel(req: Request, res: Response) {
+export async function getSeries(req: Request, res: Response) {
   try {
     const id = String(req.params?.id ?? "");
 
@@ -194,7 +195,7 @@ export async function getModel(req: Request, res: Response) {
       });
     }
 
-    const doc = await ModelModel.findById(id).populate(
+    const doc = await SeriesModel.findById(id).populate(
       "brandId",
       "name nameKey isActive"
     );
@@ -202,7 +203,7 @@ export async function getModel(req: Request, res: Response) {
     if (!doc) {
       return res.status(404).json({
         success: false,
-        message: "Model not found",
+        message: "Series not found",
       });
     }
 
@@ -213,15 +214,15 @@ export async function getModel(req: Request, res: Response) {
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to fetch Model",
+      message: error?.message || "Failed to fetch Series",
     });
   }
 }
 
 /* ========================================================================== */
-/*                                 UPDATE MODEL                               */
+/*                                UPDATE SERIES                               */
 /* ========================================================================== */
-export async function updateModel(req: Request, res: Response) {
+export async function updateSeries(req: Request, res: Response) {
   try {
     const id = String(req.params?.id ?? "");
     const brandId = norm(req.body?.brandId);
@@ -234,11 +235,11 @@ export async function updateModel(req: Request, res: Response) {
       });
     }
 
-    const current = await ModelModel.findById(id);
+    const current = await SeriesModel.findById(id);
     if (!current) {
       return res.status(404).json({
         success: false,
-        message: "Model not found",
+        message: "Series not found",
       });
     }
 
@@ -272,7 +273,7 @@ export async function updateModel(req: Request, res: Response) {
       updateData.nameKey = nextNameKey;
     }
 
-    const duplicate = await ModelModel.findOne({
+    const duplicate = await SeriesModel.findOne({
       _id: { $ne: id },
       brandId: nextBrandId,
       nameKey: nextNameKey,
@@ -281,11 +282,11 @@ export async function updateModel(req: Request, res: Response) {
     if (duplicate) {
       return res.status(409).json({
         success: false,
-        message: "Model already exists under this Brand",
+        message: "Series already exists under this Brand",
       });
     }
 
-    const updated = await ModelModel.findByIdAndUpdate(
+    const updated = await SeriesModel.findByIdAndUpdate(
       id,
       { $set: updateData },
       { new: true, runValidators: true }
@@ -293,28 +294,28 @@ export async function updateModel(req: Request, res: Response) {
 
     return res.json({
       success: true,
-      message: "Model updated successfully",
+      message: "Series updated successfully",
       data: updated,
     });
   } catch (error: any) {
     if (error?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Model already exists under this Brand",
+        message: "Series already exists under this Brand",
       });
     }
 
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to update Model",
+      message: error?.message || "Failed to update Series",
     });
   }
 }
 
 /* ========================================================================== */
-/*                                 DELETE MODEL                               */
+/*                                DELETE SERIES                               */
 /* ========================================================================== */
-export async function deleteModel(req: Request, res: Response) {
+export async function deleteSeries(req: Request, res: Response) {
   try {
     const id = String(req.params?.id ?? "");
 
@@ -325,32 +326,43 @@ export async function deleteModel(req: Request, res: Response) {
       });
     }
 
-    const current = await ModelModel.findById(id);
-    if (!current) {
-      return res.status(404).json({
+    const linkedModel = await ModelModel.findOne({
+      seriesId: id,
+    }).lean();
+
+    if (linkedModel) {
+      return res.status(400).json({
         success: false,
-        message: "Model not found",
+        message: "Cannot delete Series. Models exist under it",
       });
     }
 
-    await ModelModel.findByIdAndDelete(id);
+    const current = await SeriesModel.findById(id);
+    if (!current) {
+      return res.status(404).json({
+        success: false,
+        message: "Series not found",
+      });
+    }
+
+    await SeriesModel.findByIdAndDelete(id);
 
     return res.json({
       success: true,
-      message: "Model deleted successfully",
+      message: "Series deleted successfully",
     });
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to delete Model",
+      message: error?.message || "Failed to delete Series",
     });
   }
 }
 
 /* ========================================================================== */
-/*                              TOGGLE MODEL ACTIVE                           */
+/*                             TOGGLE SERIES ACTIVE                           */
 /* ========================================================================== */
-export async function toggleModelActive(req: Request, res: Response) {
+export async function toggleSeriesActive(req: Request, res: Response) {
   try {
     const id = String(req.params?.id ?? "");
 
@@ -370,7 +382,7 @@ export async function toggleModelActive(req: Request, res: Response) {
 
     const isActive = String(req.body.isActive) === "true";
 
-    const updated = await ModelModel.findByIdAndUpdate(
+    const updated = await SeriesModel.findByIdAndUpdate(
       id,
       { $set: { isActive } },
       { new: true, runValidators: true }
@@ -379,19 +391,19 @@ export async function toggleModelActive(req: Request, res: Response) {
     if (!updated) {
       return res.status(404).json({
         success: false,
-        message: "Model not found",
+        message: "Series not found",
       });
     }
 
     return res.json({
       success: true,
-      message: `Model ${isActive ? "activated" : "deactivated"} successfully`,
+      message: `Series ${isActive ? "activated" : "deactivated"} successfully`,
       data: updated,
     });
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to update Model status",
+      message: error?.message || "Failed to update Series status",
     });
   }
 }
