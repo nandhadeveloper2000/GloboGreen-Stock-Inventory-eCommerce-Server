@@ -70,15 +70,6 @@ const normalizeBoolean = (value: unknown, defaultValue = true): boolean => {
   return defaultValue;
 };
 
-const normalizeNumber = (value: unknown, defaultValue = 0): number => {
-  if (typeof value === "number" && !Number.isNaN(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return defaultValue;
-};
-
 const normalizeCompatibility = (compatible: unknown): CompatibilityInput[] => {
   if (!Array.isArray(compatible)) return [];
 
@@ -157,26 +148,67 @@ export const createProductCompatibility = async (
     const productBrandId = normalizeString(req.body.productBrandId);
     const compatible = normalizeCompatibility(req.body.compatible);
 
-    if (!isValidObjectId(productTypeId))
-      return res.status(400).json({ success: false, message: "Invalid productTypeId" });
+    if (!isValidObjectId(productTypeId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid productTypeId",
+      });
+    }
 
-    if (!isValidObjectId(productBrandId))
-      return res.status(400).json({ success: false, message: "Invalid productBrandId" });
+    if (!isValidObjectId(productBrandId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid productBrandId",
+      });
+    }
+
+    const productTypeExists = await ProductTypeModel.exists({
+      _id: toObjectId(productTypeId),
+      isActive: true,
+    });
+
+    if (!productTypeExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Product type not found",
+      });
+    }
+
+    const productBrandExists = await BrandModel.exists({
+      _id: toObjectId(productBrandId),
+      isActive: true,
+    });
+
+    if (!productBrandExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Product brand not found",
+      });
+    }
 
     const exists = await ProductCompatibilityModel.findOne({
       productTypeId: toObjectId(productTypeId),
+      productBrandId: toObjectId(productBrandId),
     });
 
-    if (exists)
-      return res.status(409).json({ success: false, message: "Already exists" });
+    if (exists) {
+      return res.status(409).json({
+        success: false,
+        message: "Compatibility already exists for this product type and brand",
+      });
+    }
 
     const error = await validateCompatibilityRows(compatible);
-    if (error)
-      return res.status(400).json({ success: false, message: error });
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error,
+      });
+    }
 
     const doc = await ProductCompatibilityModel.create({
-      productTypeId,
-      productBrandId,
+      productTypeId: toObjectId(productTypeId),
+      productBrandId: toObjectId(productBrandId),
       compatible,
       createdBy: buildCreatedBy(user),
     });
@@ -185,9 +217,15 @@ export const createProductCompatibility = async (
       ProductCompatibilityModel.findById(doc._id)
     );
 
-    res.status(201).json({ success: true, data });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Create failed" });
+    return res.status(201).json({
+      success: true,
+      data,
+    });
+  } catch {
+    return res.status(500).json({
+      success: false,
+      message: "Create failed",
+    });
   }
 };
 
@@ -201,9 +239,9 @@ export const listProductCompatibilities = async (
       ProductCompatibilityModel.find().sort({ createdAt: -1 })
     );
 
-    res.json({ success: true, data });
+    return res.json({ success: true, data });
   } catch {
-    res.status(500).json({ success: false });
+    return res.status(500).json({ success: false, message: "List failed" });
   }
 };
 
@@ -213,15 +251,27 @@ export const getProductCompatibility = async (
   res: Response
 ) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid compatibility id",
+      });
+    }
+
     const data = await populateQuery(
       ProductCompatibilityModel.findById(req.params.id)
     );
 
-    if (!data) return res.status(404).json({ success: false });
+    if (!data) {
+      return res.status(404).json({
+        success: false,
+        message: "Compatibility not found",
+      });
+    }
 
-    res.json({ success: true, data });
+    return res.json({ success: true, data });
   } catch {
-    res.status(500).json({ success: false });
+    return res.status(500).json({ success: false, message: "Get failed" });
   }
 };
 
@@ -231,24 +281,102 @@ export const updateProductCompatibility = async (
   res: Response
 ) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid compatibility id",
+      });
+    }
+
+    const productTypeId = normalizeString(req.body.productTypeId);
+    const productBrandId = normalizeString(req.body.productBrandId);
     const compatible = normalizeCompatibility(req.body.compatible);
+    const isActive = normalizeBoolean(req.body.isActive, true);
+
+    if (!isValidObjectId(productTypeId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid productTypeId",
+      });
+    }
+
+    if (!isValidObjectId(productBrandId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid productBrandId",
+      });
+    }
+
+    const productTypeExists = await ProductTypeModel.exists({
+      _id: toObjectId(productTypeId),
+      isActive: true,
+    });
+
+    if (!productTypeExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Product type not found",
+      });
+    }
+
+    const productBrandExists = await BrandModel.exists({
+      _id: toObjectId(productBrandId),
+      isActive: true,
+    });
+
+    if (!productBrandExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Product brand not found",
+      });
+    }
 
     const error = await validateCompatibilityRows(compatible);
-    if (error)
-      return res.status(400).json({ success: false, message: error });
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error,
+      });
+    }
+
+    const duplicate = await ProductCompatibilityModel.findOne({
+      productTypeId: toObjectId(productTypeId),
+      productBrandId: toObjectId(productBrandId),
+      _id: { $ne: req.params.id },
+    });
+
+    if (duplicate) {
+      return res.status(409).json({
+        success: false,
+        message: "Compatibility already exists for this product type and brand",
+      });
+    }
 
     const updated = await ProductCompatibilityModel.findByIdAndUpdate(
       req.params.id,
       {
-        ...req.body,
+        productTypeId: toObjectId(productTypeId),
+        productBrandId: toObjectId(productBrandId),
         compatible,
+        isActive,
       },
       { new: true }
     );
 
-    res.json({ success: true, data: updated });
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        message: "Compatibility not found",
+      });
+    }
+
+    const data = await populateQuery(
+      ProductCompatibilityModel.findById(updated._id)
+    );
+
+    return res.json({ success: true, data });
   } catch {
-    res.status(500).json({ success: false });
+    return res.status(500).json({ success: false, message: "Update failed" });
   }
 };
 
@@ -258,10 +386,27 @@ export const deleteProductCompatibility = async (
   res: Response
 ) => {
   try {
-    await ProductCompatibilityModel.findByIdAndDelete(req.params.id);
-    res.json({ success: true });
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid compatibility id",
+      });
+    }
+
+    const deleted = await ProductCompatibilityModel.findByIdAndDelete(
+      req.params.id
+    );
+
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Compatibility not found",
+      });
+    }
+
+    return res.json({ success: true, message: "Deleted successfully" });
   } catch {
-    res.status(500).json({ success: false });
+    return res.status(500).json({ success: false, message: "Delete failed" });
   }
 };
 
@@ -271,14 +416,37 @@ export const toggleProductCompatibilityActive = async (
   res: Response
 ) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid compatibility id",
+      });
+    }
+
     const doc = await ProductCompatibilityModel.findById(req.params.id);
-    if (!doc) return res.status(404).json({ success: false });
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Compatibility not found",
+      });
+    }
 
     doc.isActive = !doc.isActive;
     await doc.save();
 
-    res.json({ success: true, data: doc });
+    const data = await populateQuery(
+      ProductCompatibilityModel.findById(doc._id)
+    );
+
+    return res.json({
+      success: true,
+      message: `Compatibility ${doc.isActive ? "activated" : "deactivated"} successfully`,
+      data,
+    });
   } catch {
-    res.status(500).json({ success: false });
+    return res
+      .status(500)
+      .json({ success: false, message: "Toggle status failed" });
   }
 };

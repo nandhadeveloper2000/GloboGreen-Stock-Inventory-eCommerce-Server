@@ -43,16 +43,13 @@ const CompatibilityGroupSchema = new Schema(
 /* ---------------- MAIN SCHEMA ---------------- */
 const ProductCompatibilitySchema = new Schema(
   {
-    // ✅ CHANGED HERE
     productTypeId: {
       type: Schema.Types.ObjectId,
       ref: "ProductType",
       required: true,
-      unique: true,
       index: true,
     },
 
-    // Main product brand (Generic / Spigen)
     productBrandId: {
       type: Schema.Types.ObjectId,
       ref: "Brand",
@@ -60,7 +57,6 @@ const ProductCompatibilitySchema = new Schema(
       index: true,
     },
 
-    // Compatible brands + models
     compatible: {
       type: [CompatibilityGroupSchema],
       default: [],
@@ -83,6 +79,11 @@ const ProductCompatibilitySchema = new Schema(
 );
 
 /* ---------------- INDEXES ---------------- */
+ProductCompatibilitySchema.index(
+  { productTypeId: 1, productBrandId: 1 },
+  { unique: true }
+);
+
 ProductCompatibilitySchema.index({ productTypeId: 1, isActive: 1 });
 ProductCompatibilitySchema.index({ productBrandId: 1, isActive: 1 });
 

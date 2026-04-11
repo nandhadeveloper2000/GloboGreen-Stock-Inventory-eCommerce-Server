@@ -16,7 +16,7 @@ import ProductCompatibilityRoutes from "./productCompatibility.routes";
 import shopCatalogMapRoutes from "./shopCatalogMap.routes";
 import vendorGlobalRoutes from "./vendorGlobal.routes";
 import shopVendorMapRoutes from "./shopVendorMap.routes";
-import productGlobalRoutes from "./productGlobal.routes";
+import productGlobalRoutes from "./product.routes";
 import shopProductRoutes from "./shopProduct.routes";
 import customerRoutes from "./customer.public.routes";
 import customerShopRoutes from "./customer.shop.routes";
