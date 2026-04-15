@@ -124,7 +124,6 @@ const AuthSessionSchema = new Schema<IAuthSession>(
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
   },
   {
@@ -136,7 +135,6 @@ const AuthSessionSchema = new Schema<IAuthSession>(
 AuthSessionSchema.index({ userId: 1, userModel: 1, isRevoked: 1 });
 AuthSessionSchema.index({ userId: 1, userModel: 1, lastUsedAt: -1 });
 AuthSessionSchema.index({ sid: 1, isRevoked: 1 });
-AuthSessionSchema.index({ expiresAt: 1 });
 
 export const AuthSessionModel: Model<IAuthSession> =
   (models.AuthSession as Model<IAuthSession>) ||
