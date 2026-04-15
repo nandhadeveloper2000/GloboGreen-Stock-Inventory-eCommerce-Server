@@ -11,7 +11,7 @@ import {
 
 const router = Router();
 
-const VIEW_ROLES = [
+const VIEW_ROLES = [  
   "MASTER_ADMIN",
   "MANAGER",
   "SHOP_OWNER",
@@ -42,7 +42,7 @@ router.get("/", auth, requireRoles(...VIEW_ROLES), listProducts);
 router.get("/:id", auth, requireRoles(...VIEW_ROLES), getProductById);
 router.post("/", auth, requireRoles(...CREATE_ROLES), createProduct);
 router.put("/:id", auth, requireRoles(...UPDATE_ROLES), updateProduct);
-router.patch("/:id", auth, requireRoles(...UPDATE_ROLES), updateProduct);
+router.put("/:id", auth, requireRoles(...UPDATE_ROLES), updateProduct);
 router.delete("/:id", auth, requireRoles(...DELETE_ROLES), deleteProduct);
 
 export default router;

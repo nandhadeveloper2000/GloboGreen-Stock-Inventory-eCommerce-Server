@@ -13,6 +13,7 @@ import productTypeRoutes from "./productType.routes";
 import brandRoutes from "./brand.routes";
 import modelRoutes from "./model.routes";
 import ProductCompatibilityRoutes from "./productCompatibility.routes";
+import proudctRoutes from "./product.routes";
 import shopCatalogMapRoutes from "./shopCatalogMap.routes";
 import vendorGlobalRoutes from "./vendorGlobal.routes";
 import shopVendorMapRoutes from "./shopVendorMap.routes";
@@ -22,6 +23,7 @@ import customerRoutes from "./customer.public.routes";
 import customerShopRoutes from "./customer.shop.routes";
 import orderRoutes from "./order.routes";
 import locationRoutes from "./location.routes";
+
 const router = Router();
 
 /* ---------------- SHARED AUTH ---------------- */
@@ -44,6 +46,7 @@ router.use("/product-types", productTypeRoutes);
 router.use("/brands", brandRoutes);
 router.use("/models", modelRoutes);
 router.use("/productcompatibility", ProductCompatibilityRoutes);
+router.use("/product", proudctRoutes);
 router.use("/shop-catalog-map", shopCatalogMapRoutes);
 router.use("/vendors", vendorGlobalRoutes);
 router.use("/shop-vendor-map", shopVendorMapRoutes);
