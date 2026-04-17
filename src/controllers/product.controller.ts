@@ -1,12 +1,10 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { ProductModel } from "../models/product.model";
-
-/**
- * Replace this import with your actual cloudinary/upload helper.
- * It must return: { url: string; publicId: string }
- */
-// import { uploadBufferToCloudinary } from "../utils/cloudinary";
+import {
+  ProductModel,
+  PRODUCT_CONFIGURATION_MODES,
+} from "../models/product.model";
+import { uploadImage } from "../utils/uploadImage";
 
 const isObjectId = (id: unknown) =>
   mongoose.Types.ObjectId.isValid(String(id));
@@ -19,7 +17,11 @@ const PRODUCT_APPROVAL_STATUSES = [
   "REJECTED",
 ] as const;
 
+const DEFAULT_PRODUCT_CONFIGURATION_MODE = "variant";
+
 type ProductApprovalStatus = (typeof PRODUCT_APPROVAL_STATUSES)[number];
+type ProductConfigurationMode =
+  (typeof PRODUCT_CONFIGURATION_MODES)[number];
 
 type ImageItem = {
   url: string;
@@ -66,8 +68,19 @@ function norm(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function normalizeText(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
 function normalizeRole(value: unknown) {
   return String(value ?? "").trim().toUpperCase();
+}
+
+function getSingleParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function isMasterAdmin(user: any) {
@@ -108,6 +121,21 @@ function normalizeApprovalStatus(
 
   if (PRODUCT_APPROVAL_STATUSES.includes(normalized as ProductApprovalStatus)) {
     return normalized as ProductApprovalStatus;
+  }
+
+  return fallback;
+}
+
+function normalizeConfigurationMode(
+  value: unknown,
+  fallback: ProductConfigurationMode = DEFAULT_PRODUCT_CONFIGURATION_MODE
+): ProductConfigurationMode {
+  const normalized = String(value ?? "").trim();
+
+  if (
+    PRODUCT_CONFIGURATION_MODES.includes(normalized as ProductConfigurationMode)
+  ) {
+    return normalized as ProductConfigurationMode;
   }
 
   return fallback;
@@ -230,14 +258,19 @@ function normalizeImages(value: unknown): ImageItem[] {
     .filter(Boolean) as ImageItem[];
 }
 
-function normalizeProductInformationField(item: any): ProductInformationField | null {
+function normalizeProductInformationField(
+  item: any
+): ProductInformationField | null {
   const label = norm(item?.label);
   const rawValue = item?.value;
 
   const stringValue =
     typeof rawValue === "string" ? rawValue.trim() : rawValue;
 
-  if (!label && (stringValue === "" || stringValue === undefined || stringValue === null)) {
+  if (
+    !label &&
+    (stringValue === "" || stringValue === undefined || stringValue === null)
+  ) {
     return null;
   }
 
@@ -249,7 +282,9 @@ function normalizeProductInformationField(item: any): ProductInformationField | 
   };
 }
 
-function normalizeProductInformationSection(item: any): ProductInformationSection | null {
+function normalizeProductInformationSection(
+  item: any
+): ProductInformationSection | null {
   const title = norm(item?.title);
   const fields = normalizeArray<any>(item?.fields)
     .map((field) => normalizeProductInformationField(field))
@@ -264,7 +299,9 @@ function normalizeProductInformationSection(item: any): ProductInformationSectio
   };
 }
 
-function normalizeProductInformation(value: unknown): ProductInformationSection[] {
+function normalizeProductInformation(
+  value: unknown
+): ProductInformationSection[] {
   return normalizeArray<any>(value)
     .map((item) => normalizeProductInformationSection(item))
     .filter(Boolean) as ProductInformationSection[];
@@ -312,7 +349,9 @@ function normalizeVariantItem(item: any): VariantItem | null {
     .filter(Boolean) as VariantAttribute[];
 
   const images = normalizeImages(item?.images);
-  const productInformation = normalizeProductInformation(item?.productInformation);
+  const productInformation = normalizeProductInformation(
+    item?.productInformation
+  );
   const isActive = parseOptionalBoolean(item?.isActive) ?? true;
 
   if (
@@ -451,19 +490,45 @@ function parseFilesMap(req: Request) {
   return map;
 }
 
-/**
- * Replace body of this function with your real Cloudinary/local upload logic.
- */
-async function uploadSingleFile(file: Express.Multer.File): Promise<ImageItem> {
-  void file;
-
-  throw new Error(
-    "uploadSingleFile is not implemented. Connect your Cloudinary/storage helper here."
+function getVariantUploadMap(req: Request) {
+  const map = new Map<number, Express.Multer.File[]>();
+  const filesMap = parseFilesMap(req);
+  const explicitGroups = parseJsonField<VariantImageGroup[]>(
+    req.body?.variantImageGroups,
+    []
   );
 
-  // Example:
-  // const uploaded = await uploadBufferToCloudinary(file.buffer, "products");
-  // return { url: uploaded.url, publicId: uploaded.publicId };
+  for (const group of explicitGroups) {
+    const variantIndex = Number(group?.variantIndex);
+    const imageField = norm(group?.imageField);
+
+    if (!Number.isInteger(variantIndex) || variantIndex < 0 || !imageField) {
+      continue;
+    }
+
+    const files = filesMap[imageField] || [];
+    if (!files.length) continue;
+
+    const existing = map.get(variantIndex) || [];
+    map.set(variantIndex, [...existing, ...files]);
+  }
+
+  for (const [fieldName, files] of Object.entries(filesMap)) {
+    const match = fieldName.match(/^variantImages\[(\d+)\]$/);
+    if (!match || !files.length) continue;
+
+    const variantIndex = Number(match[1]);
+    if (!Number.isInteger(variantIndex) || variantIndex < 0) continue;
+
+    const existing = map.get(variantIndex) || [];
+    map.set(variantIndex, [...existing, ...files]);
+  }
+
+  return map;
+}
+
+async function uploadSingleFile(file: Express.Multer.File): Promise<ImageItem> {
+  return uploadImage(file, "catalog/products");
 }
 
 async function uploadImages(files: Express.Multer.File[]) {
@@ -480,13 +545,9 @@ async function attachUploadedImagesToVariant(
   req: Request,
   variant: VariantItem[]
 ): Promise<VariantItem[]> {
-  const groups = parseJsonField<VariantImageGroup[]>(
-    req.body?.variantImageGroups,
-    []
-  );
-  const filesMap = parseFilesMap(req);
+  const uploadsByVariant = getVariantUploadMap(req);
 
-  if (!groups.length) {
+  if (!uploadsByVariant.size) {
     return variant;
   }
 
@@ -495,16 +556,8 @@ async function attachUploadedImagesToVariant(
     images: Array.isArray(item.images) ? [...item.images] : [],
   }));
 
-  for (const group of groups) {
-    const variantIndex = Number(group?.variantIndex);
-    const imageField = norm(group?.imageField);
-
-    if (!Number.isInteger(variantIndex) || variantIndex < 0) continue;
-    if (!imageField) continue;
+  for (const [variantIndex, files] of uploadsByVariant.entries()) {
     if (!next[variantIndex]) continue;
-
-    const files = filesMap[imageField] || [];
-    if (!files.length) continue;
 
     const uploadedImages = await uploadImages(files);
     next[variantIndex].images.push(...uploadedImages);
@@ -518,7 +571,11 @@ async function attachUploadedMainImages(
   existingImages: ImageItem[] = []
 ): Promise<ImageItem[]> {
   const filesMap = parseFilesMap(req);
-  const mainFiles = filesMap["images"] || [];
+
+  const mainFiles = [
+    ...(filesMap["productImages"] || []),
+    ...(filesMap["images"] || []),
+  ];
 
   if (!mainFiles.length) {
     return existingImages;
@@ -547,12 +604,17 @@ function buildCreatePayload(body: any, user: any) {
     body?.productInformation,
     []
   );
+  const configurationMode = normalizeConfigurationMode(
+    body?.configurationMode
+  );
 
   return {
     itemName: norm(body?.itemName),
     itemModelNumber: norm(body?.itemModelNumber),
-    itemKey: norm(body?.itemKey),
-    searchKeys: normalizeArray<string>(searchKeys).map((item) => norm(item)).filter(Boolean),
+    itemKey: normalizeText(body?.itemKey),
+    searchKeys: normalizeArray<string>(searchKeys)
+      .map((item) => normalizeText(item))
+      .filter(Boolean),
     masterCategoryId: body?.masterCategoryId ?? null,
     categoryId: body?.categoryId ?? null,
     subcategoryId: body?.subcategoryId ?? null,
@@ -563,6 +625,7 @@ function buildCreatePayload(body: any, user: any) {
     compatible: normalizeCompatibility(compatible),
     variant: normalizeVariant(variant),
     productInformation: normalizeProductInformation(productInformation),
+    configurationMode,
     approvalStatus,
     isActiveGlobal,
     isActive: isActiveGlobal,
@@ -575,6 +638,11 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
     ...updatedByFromUser(user),
   };
 
+  const existingConfigurationMode = normalizeConfigurationMode(
+    existing?.configurationMode,
+    DEFAULT_PRODUCT_CONFIGURATION_MODE
+  );
+
   if (body?.itemName !== undefined) {
     payload.itemName = norm(body.itemName);
   }
@@ -584,14 +652,14 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
   }
 
   if (body?.itemKey !== undefined) {
-    payload.itemKey = norm(body.itemKey);
+    payload.itemKey = normalizeText(body.itemKey);
   }
 
   if (body?.searchKeys !== undefined) {
     payload.searchKeys = normalizeArray<string>(
       parseJsonField<string[]>(body.searchKeys, [])
     )
-      .map((item) => norm(item))
+      .map((item) => normalizeText(item))
       .filter(Boolean);
   }
 
@@ -641,6 +709,13 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
     );
   }
 
+  if (body?.configurationMode !== undefined) {
+    payload.configurationMode = normalizeConfigurationMode(
+      body.configurationMode,
+      existingConfigurationMode
+    );
+  }
+
   const requestedIsActive = parseOptionalBoolean(
     body?.isActiveGlobal ?? body?.isActive
   );
@@ -682,6 +757,143 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
   return payload;
 }
 
+function hasConfigurationFields(value: any) {
+  return [
+    "configurationMode",
+    "images",
+    "compatible",
+    "variant",
+    "productInformation",
+  ].some((field) => value?.[field] !== undefined);
+}
+
+function sanitizePayloadByConfigurationMode<
+  T extends {
+    configurationMode?: unknown;
+    compatible?: unknown;
+    variant?: unknown;
+    images?: unknown;
+    productInformation?: unknown;
+  },
+>(
+  payload: T,
+  fallbackMode: ProductConfigurationMode = DEFAULT_PRODUCT_CONFIGURATION_MODE
+) {
+  const configurationMode = normalizeConfigurationMode(
+    payload.configurationMode,
+    fallbackMode
+  );
+
+  payload.configurationMode = configurationMode;
+
+  if (configurationMode === "variant") {
+    delete payload.compatible;
+    delete payload.images;
+    delete payload.productInformation;
+    return payload;
+  }
+
+  if (configurationMode === "variantCompatibility") {
+    delete payload.images;
+    delete payload.productInformation;
+    return payload;
+  }
+
+  if (configurationMode === "productMediaInfoCompatibility") {
+    delete payload.variant;
+    return payload;
+  }
+
+  delete payload.variant;
+  delete payload.compatible;
+  return payload;
+}
+
+function buildUnsetByConfigurationMode(
+  configurationMode: ProductConfigurationMode
+) {
+  const $unset: Record<string, 1> = {};
+
+  if (configurationMode === "variant") {
+    $unset.compatible = 1;
+    $unset.images = 1;
+    $unset.productInformation = 1;
+  } else if (configurationMode === "variantCompatibility") {
+    $unset.images = 1;
+    $unset.productInformation = 1;
+  } else if (configurationMode === "productMediaInfoCompatibility") {
+    $unset.variant = 1;
+  } else if (configurationMode === "productMediaInfo") {
+    $unset.variant = 1;
+    $unset.compatible = 1;
+  }
+
+  return $unset;
+}
+
+function validateConfigurationModePayload(
+  payload: {
+    configurationMode?: unknown;
+    compatible?: CompatibilityGroup[];
+    variant?: VariantItem[];
+    images?: ImageItem[];
+    productInformation?: ProductInformationSection[];
+  },
+  res: Response
+) {
+  const configurationMode = normalizeConfigurationMode(
+    payload.configurationMode,
+    DEFAULT_PRODUCT_CONFIGURATION_MODE
+  );
+  const compatible = Array.isArray(payload.compatible) ? payload.compatible : [];
+  const variant = Array.isArray(payload.variant) ? payload.variant : [];
+  const images = Array.isArray(payload.images) ? payload.images : [];
+  const productInformation = Array.isArray(payload.productInformation)
+    ? payload.productInformation
+    : [];
+
+  if (
+    (configurationMode === "variant" ||
+      configurationMode === "variantCompatibility") &&
+    variant.length === 0
+  ) {
+    res.status(400).json({
+      success: false,
+      message: "At least one variant is required for the selected configuration option",
+    });
+    return false;
+  }
+
+  if (
+    (configurationMode === "variantCompatibility" ||
+      configurationMode === "productMediaInfoCompatibility") &&
+    compatible.length === 0
+  ) {
+    res.status(400).json({
+      success: false,
+      message:
+        "At least one compatible brand/model is required for the selected configuration option",
+    });
+    return false;
+  }
+
+  if (
+    (configurationMode === "productMediaInfo" ||
+      configurationMode === "productMediaInfoCompatibility") &&
+    images.length === 0 &&
+    productInformation.length === 0
+  ) {
+    res.status(400).json({
+      success: false,
+      message:
+        "Shared product images or product information are required for the selected configuration option",
+    });
+    return false;
+  }
+
+  return true;
+}
+
 function validateCreatePayload(
   payload: ReturnType<typeof buildCreatePayload>,
   res: Response
@@ -720,15 +932,21 @@ function validateCreatePayload(
     return false;
   }
 
-  if (!validateCompatibilityPayload(payload.compatible, res)) {
+  if (!validateCompatibilityPayload(payload.compatible || [], res)) {
     return false;
   }
 
-  if (!validateVariantPayload(payload.variant, res)) {
+  if (!validateVariantPayload(payload.variant || [], res)) {
     return false;
   }
 
-  if (!validateProductInformationPayload(payload.productInformation, res)) {
+  if (
+    !validateProductInformationPayload(payload.productInformation || [], res)
+  ) {
+    return false;
+  }
+
+  if (!validateConfigurationModePayload(payload, res)) {
     return false;
   }
 
@@ -778,7 +996,84 @@ function validateUpdatePayload(payload: Record<string, unknown>, res: Response) 
     return false;
   }
 
+  if (hasConfigurationFields(payload)) {
+    if (
+      !validateConfigurationModePayload(
+        payload as {
+          configurationMode?: unknown;
+          compatible?: CompatibilityGroup[];
+          variant?: VariantItem[];
+          images?: ImageItem[];
+          productInformation?: ProductInformationSection[];
+        },
+        res
+      )
+    ) {
+      return false;
+    }
+  }
+
   return true;
+}
+
+async function findDuplicateProduct(params: {
+  itemModelNumber?: string;
+  itemKey?: string;
+  excludeId?: string;
+}) {
+  const orFilters: Record<string, unknown>[] = [];
+
+  if (params.itemModelNumber) {
+    orFilters.push({ itemModelNumber: params.itemModelNumber.trim() });
+  }
+
+  if (params.itemKey) {
+    orFilters.push({ itemKey: normalizeText(params.itemKey) });
+  }
+
+  if (!orFilters.length) return null;
+
+  const query: Record<string, unknown> = {
+    $or: orFilters,
+  };
+
+  if (params.excludeId && isObjectId(params.excludeId)) {
+    query._id = { $ne: new mongoose.Types.ObjectId(params.excludeId) };
+  }
+
+  return ProductModel.findOne(query).select(
+    "_id itemName itemModelNumber itemKey"
+  );
+}
+
+function buildDuplicateResponse(res: Response, duplicate: any) {
+  return res.status(409).json({
+    success: false,
+    message: "Product already exists",
+    duplicate: duplicate
+      ? {
+          _id: duplicate._id,
+          itemName: duplicate.itemName,
+          itemModelNumber: duplicate.itemModelNumber,
+          itemKey: duplicate.itemKey,
+        }
+      : null,
+  });
+}
+
+function buildMongoDuplicateErrorResponse(res: Response, error: any) {
+  const duplicateField = Object.keys(error?.keyPattern || {})[0] || "unknown";
+  const duplicateValue =
+    error?.keyValue?.[duplicateField] !== undefined
+      ? error.keyValue[duplicateField]
+      : null;
+
+  return res.status(409).json({
+    success: false,
+    message: `${duplicateField} already exists`,
+    field: duplicateField,
+    value: duplicateValue,
+  });
 }
 
 const productPopulate = [
@@ -837,7 +1132,7 @@ export async function listProducts(req: Request, res: Response) {
 /** GET PRODUCT BY ID */
 export async function getProductById(req: Request, res: Response) {
   try {
-    const { id } = req.params;
+    const id = getSingleParam(req.params.id);
 
     if (!isObjectId(id)) {
       return res
@@ -853,15 +1148,6 @@ export async function getProductById(req: Request, res: Response) {
         .json({ success: false, message: "Product not found" });
     }
 
-    if (
-      !canViewPendingProducts((req as any).user) &&
-      !isGlobalProductActive(doc)
-    ) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Product not found" });
-    }
-
     return res.json({ success: true, data: doc });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
@@ -871,14 +1157,36 @@ export async function getProductById(req: Request, res: Response) {
 /** CREATE PRODUCT */
 export async function createProduct(req: Request, res: Response) {
   try {
-    const payload = buildCreatePayload(req.body, (req as any).user);
+    const payload = sanitizePayloadByConfigurationMode(
+      buildCreatePayload(req.body, (req as any).user)
+    );
 
     if (!validateCreatePayload(payload, res)) {
       return;
     }
 
-    payload.images = await attachUploadedMainImages(req, payload.images);
-    payload.variant = await attachUploadedImagesToVariant(req, payload.variant);
+    const duplicate = await findDuplicateProduct({
+      itemModelNumber: payload.itemModelNumber,
+      itemKey: payload.itemKey,
+    });
+
+    if (duplicate) {
+      return buildDuplicateResponse(res, duplicate);
+    }
+
+    if (payload.images !== undefined) {
+      payload.images = await attachUploadedMainImages(
+        req,
+        payload.images as ImageItem[]
+      );
+    }
+
+    if (payload.variant !== undefined) {
+      payload.variant = await attachUploadedImagesToVariant(
+        req,
+        payload.variant as VariantItem[]
+      );
+    }
 
     const doc = await ProductModel.create(payload);
     const populated = await applyProductPopulate(ProductModel.findById(doc._id));
@@ -890,10 +1198,7 @@ export async function createProduct(req: Request, res: Response) {
     });
   } catch (e: any) {
     if (e?.code === 11000) {
-      return res.status(409).json({
-        success: false,
-        message: "Product already exists (itemModelNumber or itemKey duplicate)",
-      });
+      return buildMongoDuplicateErrorResponse(res, e);
     }
 
     return res.status(500).json({ success: false, message: e.message });
@@ -903,7 +1208,7 @@ export async function createProduct(req: Request, res: Response) {
 /** UPDATE PRODUCT */
 export async function updateProduct(req: Request, res: Response) {
   try {
-    const { id } = req.params;
+    const id = getSingleParam(req.params.id);
 
     if (!isObjectId(id)) {
       return res
@@ -921,8 +1226,34 @@ export async function updateProduct(req: Request, res: Response) {
 
     const payload = buildUpdatePayload(req.body, (req as any).user, existing);
 
+    if (hasConfigurationFields(req.body)) {
+      sanitizePayloadByConfigurationMode(
+        payload,
+        normalizeConfigurationMode(
+          existing?.configurationMode,
+          DEFAULT_PRODUCT_CONFIGURATION_MODE
+        )
+      );
+    }
+
     if (!validateUpdatePayload(payload, res)) {
       return;
+    }
+
+    const duplicate = await findDuplicateProduct({
+      itemModelNumber:
+        typeof payload.itemModelNumber === "string"
+          ? payload.itemModelNumber
+          : existing.itemModelNumber,
+      itemKey:
+        typeof payload.itemKey === "string"
+          ? payload.itemKey
+          : existing.itemKey,
+      excludeId: id,
+    });
+
+    if (duplicate) {
+      return buildDuplicateResponse(res, duplicate);
     }
 
     if (payload.images !== undefined) {
@@ -939,7 +1270,22 @@ export async function updateProduct(req: Request, res: Response) {
       );
     }
 
-    const doc = await ProductModel.findByIdAndUpdate(id, payload, {
+    const finalConfigurationMode = normalizeConfigurationMode(
+      payload.configurationMode ?? existing.configurationMode,
+      DEFAULT_PRODUCT_CONFIGURATION_MODE
+    );
+
+    const unsetFields = buildUnsetByConfigurationMode(finalConfigurationMode);
+
+    const updateDoc: Record<string, unknown> = {
+      $set: payload,
+    };
+
+    if (Object.keys(unsetFields).length) {
+      updateDoc.$unset = unsetFields;
+    }
+
+    const doc = await ProductModel.findByIdAndUpdate(id, updateDoc, {
       new: true,
       runValidators: true,
     });
@@ -960,10 +1306,7 @@ export async function updateProduct(req: Request, res: Response) {
     }
 
     if (e?.code === 11000) {
-      return res.status(409).json({
-        success: false,
-        message: "Product already exists (itemModelNumber or itemKey duplicate)",
-      });
+      return buildMongoDuplicateErrorResponse(res, e);
     }
 
     return res.status(500).json({ success: false, message: e.message });
@@ -973,7 +1316,7 @@ export async function updateProduct(req: Request, res: Response) {
 /** DELETE PRODUCT */
 export async function deleteProduct(req: Request, res: Response) {
   try {
-    const { id } = req.params;
+    const id = getSingleParam(req.params.id);
 
     if (!isObjectId(id)) {
       return res

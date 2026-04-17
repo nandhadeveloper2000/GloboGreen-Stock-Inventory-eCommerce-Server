@@ -15,15 +15,20 @@ export const PRODUCT_APPROVAL_STATUSES = [
   "REJECTED",
 ] as const;
 
+export const PRODUCT_CONFIGURATION_MODES = [
+  "variant",
+  "variantCompatibility",
+  "productMediaInfoCompatibility",
+  "productMediaInfo",
+] as const;
+
 /* ---------------- HELPERS ---------------- */
 function normalizeText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function normalizeRole(value?: string | null) {
-  return String(value ?? "")
-    .trim()
-    .toUpperCase();
+  return String(value ?? "").trim().toUpperCase();
 }
 
 function normalizeApprovalStatus(value: unknown) {
@@ -38,6 +43,20 @@ function normalizeApprovalStatus(value: unknown) {
   }
 
   return "PENDING" as const;
+}
+
+function normalizeConfigurationMode(value: unknown) {
+  const normalized = String(value ?? "").trim();
+
+  if (
+    PRODUCT_CONFIGURATION_MODES.includes(
+      normalized as (typeof PRODUCT_CONFIGURATION_MODES)[number]
+    )
+  ) {
+    return normalized as (typeof PRODUCT_CONFIGURATION_MODES)[number];
+  }
+
+  return "variant" as const;
 }
 
 function uniqueCleanStrings(values: unknown[]) {
@@ -65,9 +84,7 @@ const ProductInformationFieldSchema = new Schema(
       default: "",
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
 const ProductInformationSectionSchema = new Schema(
@@ -80,12 +97,10 @@ const ProductInformationSectionSchema = new Schema(
     },
     fields: {
       type: [ProductInformationFieldSchema],
-      default: [],
+      default: undefined,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
 /* ---------------- PRODUCT COMPATIBILITY ---------------- */
@@ -116,9 +131,7 @@ const CompatibilityGroupSchema = new Schema(
       default: true,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
 /* ---------------- VARIANT ---------------- */
@@ -135,9 +148,7 @@ const VariantAttributeSchema = new Schema(
       required: true,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
 const VariantItemSchema = new Schema(
@@ -150,17 +161,22 @@ const VariantItemSchema = new Schema(
 
     attributes: {
       type: [VariantAttributeSchema],
-      default: [],
+      default: undefined,
     },
 
     images: {
       type: [ImageSchema],
-      default: [],
+      default: undefined,
+    },
+
+    videos: {
+      type: [ImageSchema],
+      default: undefined,
     },
 
     productInformation: {
       type: [ProductInformationSectionSchema],
-      default: [],
+      default: undefined,
     },
 
     isActive: {
@@ -168,9 +184,7 @@ const VariantItemSchema = new Schema(
       default: true,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
 /* ---------------- MAIN SCHEMA ---------------- */
@@ -187,6 +201,7 @@ const ProductSchema = new Schema(
       required: true,
       trim: true,
       unique: true,
+      index: true,
     },
 
     itemKey: {
@@ -194,11 +209,20 @@ const ProductSchema = new Schema(
       required: true,
       trim: true,
       lowercase: true,
+      unique: true,
+      index: true,
+    },
+
+    configurationMode: {
+      type: String,
+      enum: PRODUCT_CONFIGURATION_MODES,
+      default: "variant",
+      index: true,
     },
 
     searchKeys: {
       type: [String],
-      default: [],
+      default: undefined,
       index: true,
     },
 
@@ -246,22 +270,27 @@ const ProductSchema = new Schema(
 
     images: {
       type: [ImageSchema],
-      default: [],
+      default: undefined,
+    },
+
+    videos: {
+      type: [ImageSchema],
+      default: undefined,
     },
 
     compatible: {
       type: [CompatibilityGroupSchema],
-      default: [],
+      default: undefined,
     },
 
     variant: {
       type: [VariantItemSchema],
-      default: [],
+      default: undefined,
     },
 
     productInformation: {
       type: [ProductInformationSectionSchema],
-      default: [],
+      default: undefined,
     },
 
     approvalStatus: {
@@ -310,6 +339,7 @@ const ProductSchema = new Schema(
   },
   {
     timestamps: true,
+    minimize: true,
   }
 );
 
@@ -319,9 +349,68 @@ export type ProductDocument = HydratedDocument<Product> & {
   _id: Types.ObjectId;
 };
 
+type MediaInput = {
+  url?: string;
+  publicId?: string;
+};
+
+type ProductInformationFieldInput = {
+  label?: string;
+  value?: unknown;
+};
+
+type ProductInformationSectionInput = {
+  title?: string;
+  fields?: ProductInformationFieldInput[];
+};
+
+type CompatibilityGroupInput = {
+  brandId?: unknown;
+  modelId?: unknown[];
+  notes?: string;
+  isActive?: boolean;
+};
+
+type VariantAttributeInput = {
+  label?: string;
+  value?: string;
+};
+
+type VariantInput = {
+  title?: string;
+  attributes?: VariantAttributeInput[];
+  images?: MediaInput[];
+  videos?: MediaInput[];
+  productInformation?: ProductInformationSectionInput[];
+  isActive?: boolean;
+};
+
+type MutableProductDocument = Omit<
+  ProductDocument,
+  | "configurationMode"
+  | "searchKeys"
+  | "images"
+  | "videos"
+  | "compatible"
+  | "variant"
+  | "productInformation"
+  | "approvalStatus"
+> & {
+  configurationMode?: string;
+  searchKeys?: string[];
+  images?: MediaInput[];
+  videos?: MediaInput[];
+  compatible?: CompatibilityGroupInput[];
+  variant?: VariantInput[];
+  productInformation?: ProductInformationSectionInput[];
+  approvalStatus?: string;
+};
+
 /* ---------------- INDEXES ---------------- */
 ProductSchema.index({ itemName: 1 });
-ProductSchema.index({ itemKey: 1 });
+ProductSchema.index({ itemKey: 1 }, { unique: true });
+ProductSchema.index({ itemModelNumber: 1 }, { unique: true });
+ProductSchema.index({ configurationMode: 1, createdAt: -1 });
 ProductSchema.index({ masterCategoryId: 1, categoryId: 1, subcategoryId: 1 });
 ProductSchema.index({ productTypeId: 1, brandId: 1, modelId: 1 });
 ProductSchema.index({ approvalStatus: 1, isActiveGlobal: 1, createdAt: -1 });
@@ -331,7 +420,9 @@ ProductSchema.index({ isActiveGlobal: 1, createdAt: -1 });
 
 /* ---------------- PRE VALIDATE ---------------- */
 ProductSchema.pre("validate", function () {
-  const doc = this as ProductDocument;
+  const doc = this as MutableProductDocument & {
+    configurationMode?: string;
+  };
 
   if (doc.itemName) {
     doc.itemName = doc.itemName.trim();
@@ -344,11 +435,127 @@ ProductSchema.pre("validate", function () {
   doc.itemKey = normalizeText(
     doc.itemKey || `${doc.itemName || ""} ${doc.itemModelNumber || ""}`
   );
+
+  doc.configurationMode = normalizeConfigurationMode(doc.configurationMode);
 });
 
 /* ---------------- PRE SAVE ---------------- */
 ProductSchema.pre("save", function () {
-  const doc = this as ProductDocument;
+  const doc = this as MutableProductDocument;
+
+  doc.configurationMode = normalizeConfigurationMode(doc.configurationMode);
+
+  const images = Array.isArray(doc.images)
+    ? doc.images.filter((item) => Boolean(item?.url))
+    : undefined;
+  doc.images = images?.length ? images : undefined;
+
+  const videos = Array.isArray(doc.videos)
+    ? doc.videos.filter((item) => Boolean(item?.url))
+    : undefined;
+  doc.videos = videos?.length ? videos : undefined;
+
+  const compatible = Array.isArray(doc.compatible)
+    ? doc.compatible
+      .map((item) => ({
+        brandId: item?.brandId,
+        modelId: Array.isArray(item?.modelId)
+          ? item.modelId.filter(Boolean)
+          : [],
+        notes: String(item?.notes || "").trim(),
+        isActive: item?.isActive !== false,
+      }))
+      .filter((item) => Boolean(item.brandId))
+    : undefined;
+  doc.compatible = compatible?.length ? compatible : undefined;
+
+  const productInformation = Array.isArray(doc.productInformation)
+    ? doc.productInformation
+      .map((section) => ({
+        title: String(section?.title || "").trim(),
+        fields: Array.isArray(section?.fields)
+          ? section.fields
+              .map((field) => ({
+                label: String(field?.label || "").trim(),
+                value: field?.value ?? "",
+              }))
+              .filter(
+                (field) =>
+                  field.label ||
+                  (typeof field.value === "string"
+                    ? field.value.trim()
+                    : field.value !== null && field.value !== undefined)
+              )
+          : [],
+      }))
+      .filter((section) => section.title || section.fields.length)
+    : undefined;
+  doc.productInformation =
+    productInformation?.length ? productInformation : undefined;
+
+  const variant = Array.isArray(doc.variant)
+    ? doc.variant
+      .map((variantItem) => {
+        const attributes = Array.isArray(variantItem?.attributes)
+          ? variantItem.attributes
+              .map((attribute) => ({
+                label: String(attribute?.label || "").trim(),
+                value: String(attribute?.value || "").trim(),
+              }))
+              .filter((attribute) => attribute.label && attribute.value)
+          : [];
+
+        const images = Array.isArray(variantItem?.images)
+          ? variantItem.images.filter((item) => Boolean(item?.url))
+          : [];
+
+        const videos = Array.isArray(variantItem?.videos)
+          ? variantItem.videos.filter((item) => Boolean(item?.url))
+          : [];
+
+        const productInformation = Array.isArray(variantItem?.productInformation)
+          ? variantItem.productInformation
+              .map((section) => ({
+                title: String(section?.title || "").trim(),
+                fields: Array.isArray(section?.fields)
+                  ? section.fields
+                      .map((field) => ({
+                        label: String(field?.label || "").trim(),
+                        value: field?.value ?? "",
+                      }))
+                      .filter(
+                        (field) =>
+                          field.label ||
+                          (typeof field.value === "string"
+                            ? field.value.trim()
+                            : field.value !== null && field.value !== undefined)
+                      )
+                  : [],
+              }))
+              .filter((section) => section.title || section.fields.length)
+          : [];
+
+        return {
+          title: String(variantItem?.title || "").trim(),
+          attributes: attributes.length ? attributes : undefined,
+          images: images.length ? images : undefined,
+          videos: videos.length ? videos : undefined,
+          productInformation: productInformation.length
+            ? productInformation
+            : undefined,
+          isActive: variantItem?.isActive !== false,
+        };
+      })
+      .filter(
+        (variantItem) =>
+          Boolean(variantItem.title) ||
+          Boolean(variantItem.attributes?.length) ||
+          Boolean(variantItem.images?.length) ||
+          Boolean(variantItem.videos?.length) ||
+          Boolean(variantItem.productInformation?.length)
+      )
+    : undefined;
+  doc.variant = variant?.length ? variant : undefined;
 
   const mainProductInfoValues = Array.isArray(doc.productInformation)
     ? doc.productInformation.flatMap((section) => [
@@ -420,7 +627,7 @@ ProductSchema.pre("save", function () {
 
   doc.isActive = Boolean(doc.isActiveGlobal);
 
-  doc.searchKeys = uniqueCleanStrings([
+  const searchKeys = uniqueCleanStrings([
     ...(Array.isArray(doc.searchKeys) ? doc.searchKeys : []),
     doc.itemName || "",
     doc.itemModelNumber || "",
@@ -429,6 +636,30 @@ ProductSchema.pre("save", function () {
     ...compatibilityValues,
     ...variantValues,
   ]);
+
+  doc.searchKeys = searchKeys.length ? searchKeys : undefined;
+
+  if (doc.configurationMode === "variant") {
+    doc.images = undefined;
+    doc.videos = undefined;
+    doc.compatible = undefined;
+    doc.productInformation = undefined;
+  }
+
+  if (doc.configurationMode === "variantCompatibility") {
+    doc.images = undefined;
+    doc.videos = undefined;
+    doc.productInformation = undefined;
+  }
+
+  if (doc.configurationMode === "productMediaInfoCompatibility") {
+    doc.variant = undefined;
+  }
+
+  if (doc.configurationMode === "productMediaInfo") {
+    doc.variant = undefined;
+    doc.compatible = undefined;
+  }
 });
 
 /* ---------------- MODEL ---------------- */

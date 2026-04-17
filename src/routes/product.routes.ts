@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth";
+import { productMediaUpload } from "../middlewares/upload";
 import { requireRoles } from "../middlewares/rbac.middleware";
 import {
   listProducts,
@@ -10,6 +11,7 @@ import {
 } from "../controllers/product.controller";
 
 const router = Router();
+const productUpload = productMediaUpload.any();
 
 const VIEW_ROLES = [  
   "MASTER_ADMIN",
@@ -40,9 +42,8 @@ const DELETE_ROLES = ["MASTER_ADMIN", "MANAGER", "SHOP_OWNER"] as const;
 
 router.get("/", auth, requireRoles(...VIEW_ROLES), listProducts);
 router.get("/:id", auth, requireRoles(...VIEW_ROLES), getProductById);
-router.post("/", auth, requireRoles(...CREATE_ROLES), createProduct);
-router.put("/:id", auth, requireRoles(...UPDATE_ROLES), updateProduct);
-router.put("/:id", auth, requireRoles(...UPDATE_ROLES), updateProduct);
+router.post("/", auth, requireRoles(...CREATE_ROLES), productUpload, createProduct);
+router.put("/:id", auth, requireRoles(...UPDATE_ROLES), productUpload, updateProduct);
 router.delete("/:id", auth, requireRoles(...DELETE_ROLES), deleteProduct);
 
 export default router;
