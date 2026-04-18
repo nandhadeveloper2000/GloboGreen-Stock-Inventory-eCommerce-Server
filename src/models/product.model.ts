@@ -201,7 +201,6 @@ const ProductSchema = new Schema(
       required: true,
       trim: true,
       unique: true,
-      index: true,
     },
 
     itemKey: {
@@ -210,7 +209,6 @@ const ProductSchema = new Schema(
       trim: true,
       lowercase: true,
       unique: true,
-      index: true,
     },
 
     configurationMode: {
@@ -408,8 +406,6 @@ type MutableProductDocument = Omit<
 
 /* ---------------- INDEXES ---------------- */
 ProductSchema.index({ itemName: 1 });
-ProductSchema.index({ itemKey: 1 }, { unique: true });
-ProductSchema.index({ itemModelNumber: 1 }, { unique: true });
 ProductSchema.index({ configurationMode: 1, createdAt: -1 });
 ProductSchema.index({ masterCategoryId: 1, categoryId: 1, subcategoryId: 1 });
 ProductSchema.index({ productTypeId: 1, brandId: 1, modelId: 1 });

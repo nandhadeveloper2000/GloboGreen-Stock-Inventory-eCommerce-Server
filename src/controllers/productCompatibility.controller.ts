@@ -15,9 +15,10 @@ type AuthUser = {
 
 type CompatibilityInput = {
   brandId: string;
-  modelId?: string[];
-  notes?: string;
-  isActive?: boolean;
+  modelId: string[];
+  notes: string;
+  isActive: boolean;
+  sortOrder: number;
 };
 
 /* ---------------- AUTH HELPERS ---------------- */
@@ -63,34 +64,64 @@ const normalizeString = (value: unknown): string =>
 
 const normalizeBoolean = (value: unknown, defaultValue = true): boolean => {
   if (typeof value === "boolean") return value;
+
   if (typeof value === "string") {
-    if (value === "true") return true;
-    if (value === "false") return false;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
   }
+
   return defaultValue;
 };
+
+const normalizeNumber = (value: unknown, defaultValue = 0): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return defaultValue;
+};
+
+const escapeRegex = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const normalizeCompatibility = (compatible: unknown): CompatibilityInput[] => {
   if (!Array.isArray(compatible)) return [];
 
+  const seenBrandIds = new Set<string>();
+
   return compatible
-    .map((item) => {
+    .map((item, index) => {
       const row = item as Record<string, unknown>;
 
+      const brandId = normalizeString(row?.brandId);
+      if (!brandId) return null;
+      if (seenBrandIds.has(brandId)) return null;
+
+      const rawModelIds = Array.isArray(row?.modelId)
+        ? row.modelId
+        : Array.isArray(row?.modelIds)
+          ? row.modelIds
+          : [];
+
+      seenBrandIds.add(brandId);
+
+      const modelId = Array.from(
+        new Set(rawModelIds.map((id) => normalizeString(id)).filter(Boolean))
+      );
+
       return {
-        brandId: normalizeString(row?.brandId),
-        modelId: Array.isArray(row?.modelId)
-          ? Array.from(
-              new Set(
-                row.modelId.map((id) => normalizeString(id)).filter(Boolean)
-              )
-            )
-          : [],
+        brandId,
+        modelId,
         notes: normalizeString(row?.notes),
         isActive: normalizeBoolean(row?.isActive, true),
+        sortOrder: normalizeNumber(row?.sortOrder, index),
       };
     })
-    .filter((item) => item.brandId);
+    .filter(Boolean) as CompatibilityInput[];
 };
 
 /* ---------------- POPULATE ---------------- */
@@ -102,7 +133,33 @@ const populateQuery = (query: any) =>
     .populate("compatible.modelId", "name nameKey");
 
 /* ---------------- VALIDATION ---------------- */
-const validateCompatibilityRows = async (rows: CompatibilityInput[]) => {
+const validateBaseFields = async (
+  productTypeId: string,
+  productBrandId: string
+): Promise<string | null> => {
+  if (!isValidObjectId(productTypeId)) return "Invalid productTypeId";
+  if (!isValidObjectId(productBrandId)) return "Invalid productBrandId";
+
+  const [productTypeExists, productBrandExists] = await Promise.all([
+    ProductTypeModel.exists({
+      _id: toObjectId(productTypeId),
+      isActive: true,
+    }),
+    BrandModel.exists({
+      _id: toObjectId(productBrandId),
+      isActive: true,
+    }),
+  ]);
+
+  if (!productTypeExists) return "Product type not found";
+  if (!productBrandExists) return "Product brand not found";
+
+  return null;
+};
+
+const validateCompatibilityRows = async (
+  rows: CompatibilityInput[]
+): Promise<string | null> => {
   for (const row of rows) {
     if (!isValidObjectId(row.brandId)) {
       return "Invalid compatible brandId";
@@ -117,7 +174,7 @@ const validateCompatibilityRows = async (rows: CompatibilityInput[]) => {
       return "Compatible brand not found";
     }
 
-    if (row.modelId?.length) {
+    if (row.modelId.length > 0) {
       const validIds = row.modelId.filter(isValidObjectId);
 
       if (validIds.length !== row.modelId.length) {
@@ -131,13 +188,33 @@ const validateCompatibilityRows = async (rows: CompatibilityInput[]) => {
       });
 
       if (count !== validIds.length) {
-        return "Models not matching brand";
+        return "One or more selected models do not belong to the selected compatible brand";
       }
     }
   }
 
+  const seenBrandIds = new Set<string>();
+  for (const row of rows) {
+    if (seenBrandIds.has(row.brandId)) {
+      return "Duplicate compatible brand is not allowed inside the same record";
+    }
+    seenBrandIds.add(row.brandId);
+  }
+
   return null;
 };
+
+const buildCompatiblePayload = (compatible: CompatibilityInput[]) =>
+  compatible.map((item, index) => ({
+    brandId: toObjectId(item.brandId),
+    modelId: item.modelId.map(toObjectId),
+    notes: item.notes,
+    isActive: item.isActive,
+    sortOrder:
+      typeof item.sortOrder === "number" && item.sortOrder >= 0
+        ? item.sortOrder
+        : index,
+  }));
 
 /* ---------------- CREATE ---------------- */
 export const createProductCompatibility = async (
@@ -152,69 +229,33 @@ export const createProductCompatibility = async (
     const compatible = normalizeCompatibility(req.body.compatible);
     const isActive = normalizeBoolean(req.body.isActive, true);
 
-    if (!isValidObjectId(productTypeId)) {
+    const baseFieldError = await validateBaseFields(
+      productTypeId,
+      productBrandId
+    );
+
+    if (baseFieldError) {
+      return res.status(
+        baseFieldError.includes("not found") ? 404 : 400
+      ).json({
+        success: false,
+        message: baseFieldError,
+      });
+    }
+
+    const rowError = await validateCompatibilityRows(compatible);
+
+    if (rowError) {
       return res.status(400).json({
         success: false,
-        message: "Invalid productTypeId",
-      });
-    }
-
-    if (!isValidObjectId(productBrandId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid productBrandId",
-      });
-    }
-
-    const productTypeExists = await ProductTypeModel.exists({
-      _id: toObjectId(productTypeId),
-      isActive: true,
-    });
-
-    if (!productTypeExists) {
-      return res.status(404).json({
-        success: false,
-        message: "Product type not found",
-      });
-    }
-
-    const productBrandExists = await BrandModel.exists({
-      _id: toObjectId(productBrandId),
-      isActive: true,
-    });
-
-    if (!productBrandExists) {
-      return res.status(404).json({
-        success: false,
-        message: "Product brand not found",
-      });
-    }
-
-    const exists = await ProductCompatibilityModel.findOne({
-      productTypeId: toObjectId(productTypeId),
-      productBrandId: toObjectId(productBrandId),
-    });
-
-    if (exists) {
-      return res.status(409).json({
-        success: false,
-        message: "Compatibility already exists for this product type and brand",
-      });
-    }
-
-    const error = await validateCompatibilityRows(compatible);
-
-    if (error) {
-      return res.status(400).json({
-        success: false,
-        message: error,
+        message: rowError,
       });
     }
 
     const doc = await ProductCompatibilityModel.create({
       productTypeId: toObjectId(productTypeId),
       productBrandId: toObjectId(productBrandId),
-      compatible,
+      compatible: buildCompatiblePayload(compatible),
       isActive,
       createdBy: buildCreatedBy(user),
     });
@@ -234,7 +275,9 @@ export const createProductCompatibility = async (
     if (err?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Compatibility already exists for this product type and brand",
+        message:
+          "Duplicate key error. Remove old MongoDB unique index if productTypeId should not be unique.",
+        error: err?.message || "Duplicate key error",
       });
     }
 
@@ -251,9 +294,153 @@ export const listProductCompatibilities = async (
   res: Response
 ) => {
   try {
-    const data = await populateQuery(
-      ProductCompatibilityModel.find().sort({ createdAt: -1 })
-    );
+    const q = normalizeString(req.query.q);
+    const productTypeId = normalizeString(req.query.productTypeId);
+    const productBrandId = normalizeString(req.query.productBrandId);
+    const isActiveRaw = req.query.isActive;
+
+    const matchStage: Record<string, any> = {};
+
+    if (isValidObjectId(productTypeId)) {
+      matchStage.productTypeId = toObjectId(productTypeId);
+    }
+
+    if (isValidObjectId(productBrandId)) {
+      matchStage.productBrandId = toObjectId(productBrandId);
+    }
+
+    if (typeof isActiveRaw !== "undefined") {
+      matchStage.isActive = normalizeBoolean(isActiveRaw, true);
+    }
+
+    const pipeline: any[] = [
+      { $match: matchStage },
+      {
+        $lookup: {
+          from: "producttypes",
+          localField: "productTypeId",
+          foreignField: "_id",
+          as: "productTypeId",
+        },
+      },
+      {
+        $unwind: {
+          path: "$productTypeId",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $lookup: {
+          from: "brands",
+          localField: "productBrandId",
+          foreignField: "_id",
+          as: "productBrandId",
+        },
+      },
+      {
+        $unwind: {
+          path: "$productBrandId",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $lookup: {
+          from: "brands",
+          localField: "compatible.brandId",
+          foreignField: "_id",
+          as: "compatibleBrandDocs",
+        },
+      },
+      {
+        $lookup: {
+          from: "models",
+          localField: "compatible.modelId",
+          foreignField: "_id",
+          as: "compatibleModelDocs",
+        },
+      },
+      {
+        $addFields: {
+          compatible: {
+            $map: {
+              input: { $ifNull: ["$compatible", []] },
+              as: "row",
+              in: {
+                brandId: {
+                  $let: {
+                    vars: {
+                      matchedBrand: {
+                        $arrayElemAt: [
+                          {
+                            $filter: {
+                              input: "$compatibleBrandDocs",
+                              as: "brandDoc",
+                              cond: {
+                                $eq: ["$$brandDoc._id", "$$row.brandId"],
+                              },
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    },
+                    in: "$$matchedBrand",
+                  },
+                },
+                modelId: {
+                  $filter: {
+                    input: "$compatibleModelDocs",
+                    as: "modelDoc",
+                    cond: {
+                      $in: ["$$modelDoc._id", { $ifNull: ["$$row.modelId", []] }],
+                    },
+                  },
+                },
+                notes: { $ifNull: ["$$row.notes", ""] },
+                isActive: {
+                  $cond: [
+                    { $eq: ["$$row.isActive", false] },
+                    false,
+                    true,
+                  ],
+                },
+                sortOrder: { $ifNull: ["$$row.sortOrder", 0] },
+              },
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          compatibleBrandDocs: 0,
+          compatibleModelDocs: 0,
+        },
+      },
+    ];
+
+    if (q) {
+      const regex = new RegExp(escapeRegex(q), "i");
+
+      pipeline.push({
+        $match: {
+          $or: [
+            { "productTypeId.name": regex },
+            { "productTypeId.nameKey": regex },
+            { "productBrandId.name": regex },
+            { "productBrandId.nameKey": regex },
+            { "compatible.brandId.name": regex },
+            { "compatible.brandId.nameKey": regex },
+            { "compatible.modelId.name": regex },
+            { "compatible.modelId.nameKey": regex },
+            { "compatible.notes": regex },
+          ],
+        },
+      });
+    }
+
+    pipeline.push({ $sort: { createdAt: -1, updatedAt: -1 } });
+
+    const data = await ProductCompatibilityModel.aggregate(pipeline);
 
     return res.json({
       success: true,
@@ -322,94 +509,52 @@ export const updateProductCompatibility = async (
       });
     }
 
-    const productTypeId = normalizeString(req.body.productTypeId);
-    const productBrandId = normalizeString(req.body.productBrandId);
-    const compatible = normalizeCompatibility(req.body.compatible);
-    const isActive = normalizeBoolean(req.body.isActive, true);
+    const existing = await ProductCompatibilityModel.findById(id);
 
-    if (!isValidObjectId(productTypeId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid productTypeId",
-      });
-    }
-
-    if (!isValidObjectId(productBrandId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid productBrandId",
-      });
-    }
-
-    const productTypeExists = await ProductTypeModel.exists({
-      _id: toObjectId(productTypeId),
-      isActive: true,
-    });
-
-    if (!productTypeExists) {
-      return res.status(404).json({
-        success: false,
-        message: "Product type not found",
-      });
-    }
-
-    const productBrandExists = await BrandModel.exists({
-      _id: toObjectId(productBrandId),
-      isActive: true,
-    });
-
-    if (!productBrandExists) {
-      return res.status(404).json({
-        success: false,
-        message: "Product brand not found",
-      });
-    }
-
-    const error = await validateCompatibilityRows(compatible);
-
-    if (error) {
-      return res.status(400).json({
-        success: false,
-        message: error,
-      });
-    }
-
-    const duplicate = await ProductCompatibilityModel.findOne({
-      productTypeId: toObjectId(productTypeId),
-      productBrandId: toObjectId(productBrandId),
-      _id: { $ne: toObjectId(id) },
-    });
-
-    if (duplicate) {
-      return res.status(409).json({
-        success: false,
-        message: "Compatibility already exists for this product type and brand",
-      });
-    }
-
-    const updated = await ProductCompatibilityModel.findByIdAndUpdate(
-      id,
-      {
-        productTypeId: toObjectId(productTypeId),
-        productBrandId: toObjectId(productBrandId),
-        compatible,
-        isActive,
-      },
-      {
-        new: true,
-        runValidators: true,
-      }
-    );
-
-    if (!updated) {
+    if (!existing) {
       return res.status(404).json({
         success: false,
         message: "Compatibility not found",
       });
     }
 
+    const productTypeId = normalizeString(req.body.productTypeId);
+    const productBrandId = normalizeString(req.body.productBrandId);
+    const compatible = normalizeCompatibility(req.body.compatible);
+    const isActive = normalizeBoolean(req.body.isActive, true);
+
+    const baseFieldError = await validateBaseFields(
+      productTypeId,
+      productBrandId
+    );
+
+    if (baseFieldError) {
+      return res.status(
+        baseFieldError.includes("not found") ? 404 : 400
+      ).json({
+        success: false,
+        message: baseFieldError,
+      });
+    }
+
+    const rowError = await validateCompatibilityRows(compatible);
+
+    if (rowError) {
+      return res.status(400).json({
+        success: false,
+        message: rowError,
+      });
+    }
+
+    existing.productTypeId = toObjectId(productTypeId);
+    existing.productBrandId = toObjectId(productBrandId);
+    existing.compatible = buildCompatiblePayload(compatible) as any;
+    existing.isActive = isActive;
+
+    await existing.save();
+
     const data = await populateQuery(
-      ProductCompatibilityModel.findById(updated._id)
+      ProductCompatibilityModel.findById(existing._id)
     );
 
     return res.json({
@@ -423,7 +568,9 @@ export const updateProductCompatibility = async (
     if (err?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Compatibility already exists for this product type and brand",
+        message:
+          "Duplicate key error. Remove old MongoDB unique index if productTypeId should not be unique.",
+        error: err?.message || "Duplicate key error",
       });
     }
 
@@ -513,7 +660,7 @@ export const toggleProductCompatibilityActive = async (
 
     return res.status(500).json({
       success: false,
-      message: err?.message || "Toggle status failed",
+      message: err?.message || "Status update failed",
     });
   }
 };
