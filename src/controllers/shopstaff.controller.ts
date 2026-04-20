@@ -634,7 +634,7 @@ export async function requestShopStaffEmailOtp(req: Request, res: Response) {
     }
 
     const staff = await ShopStaffModel.findById(userId).select(
-      "+email +emailOtpHash +emailOtpExpiresAt +emailOtpAttempts shopId isActive role name verifyEmail validTo"
+      "email emailOtpHash emailOtpExpiresAt emailOtpAttempts shopId isActive role name verifyEmail"
     );
 
     if (!staff) {
@@ -666,7 +666,7 @@ export async function requestShopStaffEmailOtp(req: Request, res: Response) {
       });
     }
 
-    const email = String((staff as any).email || "").trim().toLowerCase();
+    const email = String((staff as any).email ?? "").trim().toLowerCase();
 
     if (!email) {
       return res.status(400).json({
@@ -694,13 +694,13 @@ export async function requestShopStaffEmailOtp(req: Request, res: Response) {
       message: "Verification OTP sent to email",
     });
   } catch (err: any) {
+    console.error("requestShopStaffEmailOtp error:", err);
     return res.status(500).json({
       success: false,
       message: err?.message || "Failed to send verification OTP",
     });
   }
 }
-
 export async function verifyShopStaffEmailOtp(req: Request, res: Response) {
   try {
     const user = (req as any).user as JwtUser;
@@ -1506,7 +1506,7 @@ export async function shopStaffLogin(req: Request, res: Response) {
         { mobile: normTrim(loginValue) },
       ],
     }).select(
-      "+pinHash +pinResetOtpHash +pinResetOtpExpiresAt +pinResetAttempts +pinResetTokenHash +pinResetTokenExpiresAt shopId isActive role email name"
+      "+pinHash +pinResetOtpHash +pinResetOtpExpiresAt +pinResetAttempts +pinResetTokenHash +pinResetTokenExpiresAt +emailOtpHash +emailOtpExpiresAt +emailOtpAttempts shopId isActive role email name verifyEmail"
     );
 
     if (!staff) {
@@ -1528,7 +1528,14 @@ export async function shopStaffLogin(req: Request, res: Response) {
       });
     }
 
+    // Master access gate:
+    // staff login is allowed only when
+    // 1) staff is active
+    // 2) shop is active
+    // 3) linked shop owner is active
+    // 4) linked shop owner validity is not expired
     const state = await validateShopStaffAccountState(staff);
+
     if (!state.ok) {
       return res.status(state.status).json({
         success: false,
@@ -1555,9 +1562,11 @@ export async function shopStaffLogin(req: Request, res: Response) {
       ipAddress: requestIp,
     });
 
+    const resolvedRole = toShopStaffRole((staff as any).role, "EMPLOYEE");
+
     const session = await createLoginSession({
-      userId: String(staff._id),
-      role: toShopStaffRole((staff as any).role, "EMPLOYEE"),
+      userId: String((staff as any)._id),
+      role: resolvedRole,
       userModel: "ShopStaff",
       ipAddress: requestIp,
       userAgent: req.headers["user-agent"] || "",
