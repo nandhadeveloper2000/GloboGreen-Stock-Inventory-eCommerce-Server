@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import ProductCompatibilityModel from "../models/productCompatibility.model";
-import { ProductTypeModel } from "../models/productType.model";
+import { SubCategoryModel } from "../models/subcategory.model";
 import { BrandModel } from "../models/brand.model";
 import { ModelModel } from "../models/model.model";
 
@@ -127,22 +127,22 @@ const normalizeCompatibility = (compatible: unknown): CompatibilityInput[] => {
 /* ---------------- POPULATE ---------------- */
 const populateQuery = (query: any) =>
   query
-    .populate("productTypeId", "name nameKey")
+    .populate("subCategoryId", "name nameKey")
     .populate("productBrandId", "name nameKey")
     .populate("compatible.brandId", "name nameKey")
     .populate("compatible.modelId", "name nameKey");
 
 /* ---------------- VALIDATION ---------------- */
 const validateBaseFields = async (
-  productTypeId: string,
+  subCategoryId: string,
   productBrandId: string
 ): Promise<string | null> => {
-  if (!isValidObjectId(productTypeId)) return "Invalid productTypeId";
+  if (!isValidObjectId(subCategoryId)) return "Invalid subCategoryId";
   if (!isValidObjectId(productBrandId)) return "Invalid productBrandId";
 
-  const [productTypeExists, productBrandExists] = await Promise.all([
-    ProductTypeModel.exists({
-      _id: toObjectId(productTypeId),
+  const [subCategoryExists, productBrandExists] = await Promise.all([
+    SubCategoryModel.exists({
+      _id: toObjectId(subCategoryId),
       isActive: true,
     }),
     BrandModel.exists({
@@ -151,7 +151,7 @@ const validateBaseFields = async (
     }),
   ]);
 
-  if (!productTypeExists) return "Product type not found";
+  if (!subCategoryExists) return "Sub category not found";
   if (!productBrandExists) return "Product brand not found";
 
   return null;
@@ -224,13 +224,13 @@ export const createProductCompatibility = async (
   try {
     const user = getAuthUser(req);
 
-    const productTypeId = normalizeString(req.body.productTypeId);
+    const subCategoryId = normalizeString(req.body.subCategoryId);
     const productBrandId = normalizeString(req.body.productBrandId);
     const compatible = normalizeCompatibility(req.body.compatible);
     const isActive = normalizeBoolean(req.body.isActive, true);
 
     const baseFieldError = await validateBaseFields(
-      productTypeId,
+      subCategoryId,
       productBrandId
     );
 
@@ -253,7 +253,7 @@ export const createProductCompatibility = async (
     }
 
     const doc = await ProductCompatibilityModel.create({
-      productTypeId: toObjectId(productTypeId),
+      subCategoryId: toObjectId(subCategoryId),
       productBrandId: toObjectId(productBrandId),
       compatible: buildCompatiblePayload(compatible),
       isActive,
@@ -275,8 +275,7 @@ export const createProductCompatibility = async (
     if (err?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message:
-          "Duplicate key error. Remove old MongoDB unique index if productTypeId should not be unique.",
+        message: "Duplicate key error",
         error: err?.message || "Duplicate key error",
       });
     }
@@ -295,14 +294,14 @@ export const listProductCompatibilities = async (
 ) => {
   try {
     const q = normalizeString(req.query.q);
-    const productTypeId = normalizeString(req.query.productTypeId);
+    const subCategoryId = normalizeString(req.query.subCategoryId);
     const productBrandId = normalizeString(req.query.productBrandId);
     const isActiveRaw = req.query.isActive;
 
     const matchStage: Record<string, any> = {};
 
-    if (isValidObjectId(productTypeId)) {
-      matchStage.productTypeId = toObjectId(productTypeId);
+    if (isValidObjectId(subCategoryId)) {
+      matchStage.subCategoryId = toObjectId(subCategoryId);
     }
 
     if (isValidObjectId(productBrandId)) {
@@ -317,15 +316,15 @@ export const listProductCompatibilities = async (
       { $match: matchStage },
       {
         $lookup: {
-          from: "producttypes",
-          localField: "productTypeId",
+          from: "subcategories",
+          localField: "subCategoryId",
           foreignField: "_id",
-          as: "productTypeId",
+          as: "subCategoryId",
         },
       },
       {
         $unwind: {
-          path: "$productTypeId",
+          path: "$subCategoryId",
           preserveNullAndEmptyArrays: true,
         },
       },
@@ -398,11 +397,7 @@ export const listProductCompatibilities = async (
                 },
                 notes: { $ifNull: ["$$row.notes", ""] },
                 isActive: {
-                  $cond: [
-                    { $eq: ["$$row.isActive", false] },
-                    false,
-                    true,
-                  ],
+                  $cond: [{ $eq: ["$$row.isActive", false] }, false, true],
                 },
                 sortOrder: { $ifNull: ["$$row.sortOrder", 0] },
               },
@@ -424,8 +419,8 @@ export const listProductCompatibilities = async (
       pipeline.push({
         $match: {
           $or: [
-            { "productTypeId.name": regex },
-            { "productTypeId.nameKey": regex },
+            { "subCategoryId.name": regex },
+            { "subCategoryId.nameKey": regex },
             { "productBrandId.name": regex },
             { "productBrandId.nameKey": regex },
             { "compatible.brandId.name": regex },
@@ -518,13 +513,13 @@ export const updateProductCompatibility = async (
       });
     }
 
-    const productTypeId = normalizeString(req.body.productTypeId);
+    const subCategoryId = normalizeString(req.body.subCategoryId);
     const productBrandId = normalizeString(req.body.productBrandId);
     const compatible = normalizeCompatibility(req.body.compatible);
     const isActive = normalizeBoolean(req.body.isActive, true);
 
     const baseFieldError = await validateBaseFields(
-      productTypeId,
+      subCategoryId,
       productBrandId
     );
 
@@ -546,7 +541,7 @@ export const updateProductCompatibility = async (
       });
     }
 
-    existing.productTypeId = toObjectId(productTypeId);
+    (existing as any).subCategoryId = toObjectId(subCategoryId);
     existing.productBrandId = toObjectId(productBrandId);
     existing.compatible = buildCompatiblePayload(compatible) as any;
     existing.isActive = isActive;
@@ -568,8 +563,7 @@ export const updateProductCompatibility = async (
     if (err?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message:
-          "Duplicate key error. Remove old MongoDB unique index if productTypeId should not be unique.",
+        message: "Duplicate key error",
         error: err?.message || "Duplicate key error",
       });
     }

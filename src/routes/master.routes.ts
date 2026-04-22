@@ -3,6 +3,7 @@ import {
   masterLogin,
   masterGoogleLogin,
   masterMe,
+  masterUpdateMe,
   masterList,
   masterGetById,
   masterUpdate,
@@ -30,9 +31,11 @@ router.post("/google-login", loginRateLimiter, masterGoogleLogin);
 router.post("/forgot-pin", forgotPinRateLimiter, masterForgotPin);
 router.post("/reset-pin", otpVerifyRateLimiter, masterResetPin);
 
-/* ---------- PROTECTED (MASTER) ---------- */
+/* ---------- PROTECTED (MASTER SELF) ---------- */
 router.post("/change-pin", auth, requireRole("MASTER_ADMIN"), masterChangePin);
+
 router.get("/me", auth, requireRole("MASTER_ADMIN"), masterMe);
+router.put("/me", auth, requireRole("MASTER_ADMIN"), masterUpdateMe);
 
 /* ---------- AVATAR (SELF) ---------- */
 router.post(

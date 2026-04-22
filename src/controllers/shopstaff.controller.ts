@@ -1997,3 +1997,210 @@ export async function changeShopStaffPin(req: Request, res: Response) {
     });
   }
 }
+export async function shopStaffDocsUpload(req: Request, res: Response) {
+  try {
+    const user = (req as any).user as JwtUser;
+    const userId = String(user?.sub || user?.id || "").trim();
+
+    if (!userId || !isObjectId(userId)) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const doc = await ShopStaffModel.findById(userId);
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    const files = req.files as
+      | { [fieldname: string]: Express.Multer.File[] }
+      | undefined;
+
+    const idProofFile = files?.idproof?.[0];
+
+    if (!idProofFile) {
+      return res.status(400).json({
+        success: false,
+        message: "idproof file required",
+      });
+    }
+
+    const uploaded = await uploadToCloud(
+      idProofFile,
+      "Shop Stack/shopstaff/idproof"
+    );
+
+    await safeCloudDelete((doc as any).idProofPublicId);
+
+    (doc as any).idProofUrl = uploaded.url;
+    (doc as any).idProofPublicId = uploaded.publicId;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "ID proof uploaded successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to upload ID proof",
+    });
+  }
+}
+
+export async function shopStaffDocsRemove(req: Request, res: Response) {
+  try {
+    const user = (req as any).user as JwtUser;
+    const userId = String(user?.sub || user?.id || "").trim();
+
+    if (!userId || !isObjectId(userId)) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const key = String(req.params.key || "").trim();
+
+    if (key !== "idproof") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid document key",
+      });
+    }
+
+    const doc = await ShopStaffModel.findById(userId);
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    await safeCloudDelete((doc as any).idProofPublicId);
+
+    (doc as any).idProofUrl = "";
+    (doc as any).idProofPublicId = "";
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "ID proof removed successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to remove ID proof",
+    });
+  }
+}
+export async function shopStaffAvatarUpload(req: Request, res: Response) {
+  try {
+    const user = (req as any).user as JwtUser;
+    const userId = String(user?.sub || user?.id || "").trim();
+
+    if (!userId || !isObjectId(userId)) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const doc = await ShopStaffModel.findById(userId);
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    const files = req.files as
+      | { [fieldname: string]: Express.Multer.File[] }
+      | undefined;
+
+    const avatarFile = files?.avatar?.[0];
+
+    if (!avatarFile) {
+      return res.status(400).json({
+        success: false,
+        message: "avatar file required",
+      });
+    }
+
+    const uploaded = await uploadToCloud(
+      avatarFile,
+      "Shop Stack/shopstaff/avatar"
+    );
+
+    await safeCloudDelete((doc as any).avatarPublicId);
+
+    (doc as any).avatarUrl = uploaded.url;
+    (doc as any).avatarPublicId = uploaded.publicId;
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "Avatar uploaded successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to upload avatar",
+    });
+  }
+}
+
+export async function shopStaffAvatarRemove(req: Request, res: Response) {
+  try {
+    const user = (req as any).user as JwtUser;
+    const userId = String(user?.sub || user?.id || "").trim();
+
+    if (!userId || !isObjectId(userId)) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const doc = await ShopStaffModel.findById(userId);
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    await safeCloudDelete((doc as any).avatarPublicId);
+
+    (doc as any).avatarUrl = "";
+    (doc as any).avatarPublicId = "";
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "Avatar removed successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to remove avatar",
+    });
+  }
+}

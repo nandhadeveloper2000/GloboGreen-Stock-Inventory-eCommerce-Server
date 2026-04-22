@@ -20,6 +20,8 @@ import {
   getShopOwnerMe,
   shopOwnerAvatarUpload,
   shopOwnerAvatarRemove,
+  shopOwnerDocsUpload,
+  shopOwnerDocsRemove,
   masterShopOwnerAvatarUpload,
   masterShopOwnerAvatarRemove,
   masterShopOwnerDocsUpload,
@@ -96,6 +98,21 @@ router.delete(
   auth,
   requireRoles("SHOP_OWNER"),
   shopOwnerAvatarRemove
+);
+
+router.put(
+  "/me/docs",
+  auth,
+  requireRoles("SHOP_OWNER"),
+  upload.fields([{ name: "idProof", maxCount: 1 }]),
+  shopOwnerDocsUpload
+);
+
+router.delete(
+  "/me/docs/:key",
+  auth,
+  requireRoles("SHOP_OWNER"),
+  shopOwnerDocsRemove
 );
 
 /* ===================== ADMIN CREATE ===================== */

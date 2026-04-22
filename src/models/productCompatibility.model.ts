@@ -51,9 +51,9 @@ const CompatibilityGroupSchema = new Schema(
 /* ---------------- MAIN SCHEMA ---------------- */
 const ProductCompatibilitySchema = new Schema(
   {
-    productTypeId: {
+    subCategoryId: {
       type: Schema.Types.ObjectId,
-      ref: "ProductType",
+      ref: "SubCategory",
       required: true,
       index: true,
     },
@@ -147,8 +147,7 @@ ProductCompatibilitySchema.pre("validate", function () {
 });
 
 /* ---------------- INDEXES ---------------- */
-/* no unique index at all */
-ProductCompatibilitySchema.index({ productTypeId: 1, isActive: 1 });
+ProductCompatibilitySchema.index({ subCategoryId: 1, isActive: 1 });
 ProductCompatibilitySchema.index({ productBrandId: 1, isActive: 1 });
 ProductCompatibilitySchema.index({ "compatible.brandId": 1, isActive: 1 });
 ProductCompatibilitySchema.index({ createdAt: -1 });

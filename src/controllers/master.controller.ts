@@ -610,6 +610,98 @@ export async function masterMe(req: AuthRequest, res: Response) {
   }
 }
 
+export async function masterUpdateMe(req: AuthRequest, res: Response) {
+  try {
+    const id = getAuthUserId(req);
+
+    if (!id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const master = await MasterModel.findById(id).select(
+      "+pinHash +pinResetOtp +pinResetOtpExpiresAt"
+    );
+
+    if (!master || !master.isActive) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const { name, username, email, mobile, additionalNumber } = req.body as {
+      name?: string;
+      username?: string;
+      email?: string;
+      mobile?: string;
+      additionalNumber?: string;
+    };
+
+    if (typeof name === "string") {
+      master.name = name.trim();
+    }
+
+    if (typeof username === "string" && username.trim()) {
+      const uname = username.trim().toLowerCase();
+
+      const exists = await MasterModel.findOne({
+        username: uname,
+        _id: { $ne: master._id },
+      });
+
+      if (exists) {
+        return res.status(409).json({
+          success: false,
+          message: "username already exists",
+        });
+      }
+
+      master.username = uname;
+    }
+
+    if (typeof email === "string" && email.trim()) {
+      const em = email.trim().toLowerCase();
+
+      const exists = await MasterModel.findOne({
+        email: em,
+        _id: { $ne: master._id },
+      });
+
+      if (exists) {
+        return res.status(409).json({
+          success: false,
+          message: "email already exists",
+        });
+      }
+
+      master.email = em;
+    }
+
+    if (typeof mobile === "string") {
+      (master as any).mobile = mobile.trim();
+    }
+
+    if (typeof additionalNumber === "string") {
+      (master as any).additionalNumber = additionalNumber.trim();
+    }
+
+    await master.save();
+
+    return res.json({
+      success: true,
+      data: { user: safeMaster(master) },
+    });
+  } catch (e: any) {
+    return res.status(500).json({
+      success: false,
+      message: e?.message || "Failed to update profile",
+    });
+  }
+}
+
 /* ===================== ADMIN CRUD ===================== */
 
 export async function masterList(req: AuthRequest, res: Response) {
@@ -712,6 +804,8 @@ export async function masterUpdate(req: AuthRequest, res: Response) {
       name,
       username,
       email,
+      mobile,
+      additionalNumber,
       role,
       isActive,
       avatarUrl,
@@ -721,6 +815,8 @@ export async function masterUpdate(req: AuthRequest, res: Response) {
       name?: string;
       username?: string;
       email?: string;
+      mobile?: string;
+      additionalNumber?: string;
       role?: string;
       isActive?: boolean;
       avatarUrl?: string;
@@ -764,6 +860,14 @@ export async function masterUpdate(req: AuthRequest, res: Response) {
       }
 
       master.email = em;
+    }
+
+    if (typeof mobile === "string") {
+      (master as any).mobile = mobile.trim();
+    }
+
+    if (typeof additionalNumber === "string") {
+      (master as any).additionalNumber = additionalNumber.trim();
     }
 
     if (typeof avatarUrl === "string") {

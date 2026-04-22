@@ -1501,18 +1501,36 @@ export async function updateShopOwnerMe(req: Request, res: Response) {
       });
     }
 
-    const { name, username, email, additionalNumber } = req.body as {
-      name?: string;
-      username?: string;
-      email?: string;
-      additionalNumber?: string;
-    };
+    const {
+      name,
+      username,
+      email,
+      mobile,
+      additionalNumber,
+      address,
+      state,
+      district,
+      taluk,
+      area,
+      street,
+      pincode,
+    } = req.body as any;
 
     const nName = name !== undefined ? normTrim(name) : undefined;
     const nUsername = username !== undefined ? normLower(username) : undefined;
     const nEmail = email !== undefined ? normLower(email) : undefined;
+    const nMobile = mobile !== undefined ? normTrim(mobile) : undefined;
     const nAdditional =
       additionalNumber !== undefined ? normTrim(additionalNumber) : undefined;
+
+    const nextAddress = {
+      state: normTrim(address?.state ?? state ?? (doc as any).address?.state ?? ""),
+      district: normTrim(address?.district ?? district ?? (doc as any).address?.district ?? ""),
+      taluk: normTrim(address?.taluk ?? taluk ?? (doc as any).address?.taluk ?? ""),
+      area: normTrim(address?.area ?? area ?? (doc as any).address?.area ?? ""),
+      street: normTrim(address?.street ?? street ?? (doc as any).address?.street ?? ""),
+      pincode: normTrim(address?.pincode ?? pincode ?? (doc as any).address?.pincode ?? ""),
+    };
 
     if (nUsername && nUsername !== (doc as any).username) {
       const exists = await ShopOwnerModel.findOne({
@@ -1530,7 +1548,7 @@ export async function updateShopOwnerMe(req: Request, res: Response) {
       (doc as any).username = nUsername;
     }
 
-    if (nEmail && nEmail !== (doc as any).email) {
+    if (nEmail !== undefined && nEmail !== (doc as any).email) {
       if ((doc as any).verifyEmail === true) {
         return res.status(400).json({
           success: false,
@@ -1557,6 +1575,26 @@ export async function updateShopOwnerMe(req: Request, res: Response) {
       (doc as any).emailOtpAttempts = 0;
     }
 
+    if (mobile !== undefined) {
+      if (nMobile) {
+        const exists = await ShopOwnerModel.findOne({
+          _id: { $ne: doc._id },
+          mobile: nMobile,
+        }).select("_id");
+
+        if (exists) {
+          return res.status(409).json({
+            success: false,
+            message: "mobile already exists",
+          });
+        }
+
+        (doc as any).mobile = nMobile;
+      } else {
+        (doc as any).mobile = "";
+      }
+    }
+
     if (additionalNumber !== undefined) {
       if (nAdditional) {
         const exists = await ShopOwnerModel.findOne({
@@ -1573,13 +1611,15 @@ export async function updateShopOwnerMe(req: Request, res: Response) {
 
         (doc as any).additionalNumber = nAdditional;
       } else {
-        (doc as any).additionalNumber = undefined;
+        (doc as any).additionalNumber = "";
       }
     }
 
     if (nName !== undefined) {
       (doc as any).name = nName;
     }
+
+    (doc as any).address = nextAddress;
 
     await doc.save();
 
@@ -2125,6 +2165,122 @@ export async function masterShopOwnerDocsRemove(req: Request, res: Response) {
     return res.status(500).json({
       success: false,
       message: err?.message || "Failed to remove document",
+    });
+  }
+}
+export async function shopOwnerDocsUpload(req: Request, res: Response) {
+  try {
+    const u = getAuthUser(req);
+
+    if (!u?.sub || !isObjectId(u.sub)) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const files = req.files as
+      | { [fieldname: string]: Express.Multer.File[] }
+      | undefined;
+
+    const idProofFile = files?.idProof?.[0];
+
+    if (!idProofFile) {
+      return res.status(400).json({
+        success: false,
+        message: "idProof file required",
+      });
+    }
+
+    const doc = await ShopOwnerModel.findById(u.sub);
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    const uploaded = await uploadDocument(
+      idProofFile,
+      CLOUD_FOLDER_SHOPOWNER_DOCS
+    );
+
+    await cloudinaryDelete((doc as any).idProof?.publicId);
+
+    (doc as any).idProof = {
+      url: uploaded.url,
+      publicId: uploaded.publicId,
+      mimeType: uploaded.mimeType,
+      fileName: uploaded.fileName,
+      bytes: uploaded.bytes,
+    };
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "ID proof uploaded successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to upload ID proof",
+    });
+  }
+}
+
+export async function shopOwnerDocsRemove(req: Request, res: Response) {
+  try {
+    const u = getAuthUser(req);
+
+    if (!u?.sub || !isObjectId(u.sub)) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const key = String(req.params.key || "").trim();
+
+    if (key !== "idProof") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid document key",
+      });
+    }
+
+    const doc = await ShopOwnerModel.findById(u.sub);
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    await cloudinaryDelete((doc as any).idProof?.publicId);
+
+    (doc as any).idProof = {
+      url: "",
+      publicId: "",
+      mimeType: "",
+      fileName: "",
+      bytes: 0,
+    };
+
+    await doc.save();
+
+    return res.json({
+      success: true,
+      message: "ID proof removed successfully",
+      data: safe(doc),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to remove ID proof",
     });
   }
 }

@@ -159,6 +159,12 @@ const VariantItemSchema = new Schema(
       default: "",
     },
 
+    description: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
     attributes: {
       type: [VariantAttributeSchema],
       default: undefined,
@@ -171,6 +177,11 @@ const VariantItemSchema = new Schema(
 
     videos: {
       type: [ImageSchema],
+      default: undefined,
+    },
+
+    compatible: {
+      type: [CompatibilityGroupSchema],
       default: undefined,
     },
 
@@ -211,6 +222,12 @@ const ProductSchema = new Schema(
       unique: true,
     },
 
+    description: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
     configurationMode: {
       type: String,
       enum: PRODUCT_CONFIGURATION_MODES,
@@ -245,26 +262,19 @@ const ProductSchema = new Schema(
       index: true,
     },
 
-    productTypeId: {
-      type: Schema.Types.ObjectId,
-      ref: "ProductType",
-      required: true,
-      index: true,
-    },
+    brandId: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "Brand",
+      },
+    ],
 
-    brandId: {
-      type: Schema.Types.ObjectId,
-      ref: "Brand",
-      required: true,
-      index: true,
-    },
-
-    modelId: {
-      type: Schema.Types.ObjectId,
-      ref: "Model",
-      required: true,
-      index: true,
-    },
+    modelId: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "Model",
+      },
+    ],
 
     images: {
       type: [ImageSchema],
@@ -376,15 +386,19 @@ type VariantAttributeInput = {
 
 type VariantInput = {
   title?: string;
+  description?: string;
   attributes?: VariantAttributeInput[];
   images?: MediaInput[];
   videos?: MediaInput[];
+  compatible?: CompatibilityGroupInput[];
   productInformation?: ProductInformationSectionInput[];
   isActive?: boolean;
 };
 
 type MutableProductDocument = Omit<
   ProductDocument,
+  | "brandId"
+  | "modelId"
   | "configurationMode"
   | "searchKeys"
   | "images"
@@ -396,6 +410,8 @@ type MutableProductDocument = Omit<
 > & {
   configurationMode?: string;
   searchKeys?: string[];
+  brandId?: unknown[];
+  modelId?: unknown[];
   images?: MediaInput[];
   videos?: MediaInput[];
   compatible?: CompatibilityGroupInput[];
@@ -408,7 +424,8 @@ type MutableProductDocument = Omit<
 ProductSchema.index({ itemName: 1 });
 ProductSchema.index({ configurationMode: 1, createdAt: -1 });
 ProductSchema.index({ masterCategoryId: 1, categoryId: 1, subcategoryId: 1 });
-ProductSchema.index({ productTypeId: 1, brandId: 1, modelId: 1 });
+ProductSchema.index({ brandId: 1 });
+ProductSchema.index({ modelId: 1 });
 ProductSchema.index({ approvalStatus: 1, isActiveGlobal: 1, createdAt: -1 });
 ProductSchema.index({ createdBy: 1, createdByRole: 1 });
 ProductSchema.index({ isActive: 1, createdAt: -1 });
@@ -427,6 +444,18 @@ ProductSchema.pre("validate", function () {
   if (doc.itemModelNumber) {
     doc.itemModelNumber = doc.itemModelNumber.trim();
   }
+
+  if (typeof doc.description === "string") {
+    doc.description = doc.description.trim();
+  }
+
+  doc.brandId = Array.isArray(doc.brandId)
+    ? doc.brandId.filter(Boolean)
+    : undefined;
+
+  doc.modelId = Array.isArray(doc.modelId)
+    ? doc.modelId.filter(Boolean)
+    : undefined;
 
   doc.itemKey = normalizeText(
     doc.itemKey || `${doc.itemName || ""} ${doc.itemModelNumber || ""}`
@@ -509,6 +538,19 @@ ProductSchema.pre("save", function () {
           ? variantItem.videos.filter((item) => Boolean(item?.url))
           : [];
 
+        const compatible = Array.isArray(variantItem?.compatible)
+          ? variantItem.compatible
+              .map((item) => ({
+                brandId: item?.brandId,
+                modelId: Array.isArray(item?.modelId)
+                  ? item.modelId.filter(Boolean)
+                  : [],
+                notes: String(item?.notes || "").trim(),
+                isActive: item?.isActive !== false,
+              }))
+              .filter((item) => Boolean(item.brandId))
+          : [];
+
         const productInformation = Array.isArray(variantItem?.productInformation)
           ? variantItem.productInformation
               .map((section) => ({
@@ -533,9 +575,11 @@ ProductSchema.pre("save", function () {
 
         return {
           title: String(variantItem?.title || "").trim(),
+          description: String(variantItem?.description || "").trim(),
           attributes: attributes.length ? attributes : undefined,
           images: images.length ? images : undefined,
           videos: videos.length ? videos : undefined,
+          compatible: compatible.length ? compatible : undefined,
           productInformation: productInformation.length
             ? productInformation
             : undefined,
@@ -545,9 +589,11 @@ ProductSchema.pre("save", function () {
       .filter(
         (variantItem) =>
           Boolean(variantItem.title) ||
+          Boolean(variantItem.description) ||
           Boolean(variantItem.attributes?.length) ||
           Boolean(variantItem.images?.length) ||
           Boolean(variantItem.videos?.length) ||
+          Boolean(variantItem.compatible?.length) ||
           Boolean(variantItem.productInformation?.length)
       )
     : undefined;
@@ -592,9 +638,15 @@ ProductSchema.pre("save", function () {
             ])
           : [];
 
+        const variantCompatibilityValues = Array.isArray(variantItem?.compatible)
+          ? variantItem.compatible.flatMap((item) => [item?.notes || ""])
+          : [];
+
         return [
           variantItem?.title || "",
+          variantItem?.description || "",
           ...attributeValues,
+          ...variantCompatibilityValues,
           ...variantProductInfoValues,
         ];
       })
@@ -628,6 +680,7 @@ ProductSchema.pre("save", function () {
     doc.itemName || "",
     doc.itemModelNumber || "",
     doc.itemKey || "",
+    doc.description || "",
     ...mainProductInfoValues,
     ...compatibilityValues,
     ...variantValues,

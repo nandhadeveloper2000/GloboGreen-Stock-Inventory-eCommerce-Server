@@ -29,6 +29,10 @@ import {
   updateMyShopStaffProfile,
   requestShopStaffEmailOtp,
   verifyShopStaffEmailOtp,
+  shopStaffAvatarUpload,
+  shopStaffAvatarRemove,
+  shopStaffDocsUpload,
+  shopStaffDocsRemove,
 } from "../controllers/shopstaff.controller";
 
 const router = Router();
@@ -87,6 +91,38 @@ router.post(
   auth,
   requireRoles("SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
   verifyShopStaffEmailOtp
+);
+
+/* ===================== SELF AVATAR ===================== */
+router.put(
+  "/me/avatar",
+  auth,
+  requireRoles("SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
+  upload.fields([{ name: "avatar", maxCount: 1 }]),
+  shopStaffAvatarUpload
+);
+
+router.delete(
+  "/me/avatar",
+  auth,
+  requireRoles("SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
+  shopStaffAvatarRemove
+);
+
+/* ===================== SELF DOCS ===================== */
+router.put(
+  "/me/docs",
+  auth,
+  requireRoles("SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
+  upload.fields([{ name: "idproof", maxCount: 1 }]),
+  shopStaffDocsUpload
+);
+
+router.delete(
+  "/me/docs/:key",
+  auth,
+  requireRoles("SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
+  shopStaffDocsRemove
 );
 
 /* ===================== CRUD ===================== */

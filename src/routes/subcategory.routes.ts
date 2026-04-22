@@ -45,7 +45,15 @@ router.put(
   toggleSubCategoryActive
 );
 
-router.post(
+router.put(
+  "/:id/image",
+  auth,
+  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  imageUpload,
+  updateSubCategoryImage
+);
+
+router.patch(
   "/:id/image",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),

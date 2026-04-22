@@ -52,8 +52,11 @@ type CompatibilityGroup = {
 
 type VariantItem = {
   title: string;
+  description: string;
   attributes: VariantAttribute[];
   images: ImageItem[];
+  videos: ImageItem[];
+  compatible: CompatibilityGroup[];
   productInformation: ProductInformationSection[];
   isActive: boolean;
 };
@@ -61,6 +64,14 @@ type VariantItem = {
 type VariantImageGroup = {
   variantIndex: number;
   imageField: string;
+  fieldName?: string;
+  fileNames?: string[];
+};
+
+type VariantVideoGroup = {
+  variantIndex: number;
+  videoField: string;
+  fieldName?: string;
   fileNames?: string[];
 };
 
@@ -200,6 +211,7 @@ function buildSearchFilter(q: string) {
       { itemName: { $regex: value, $options: "i" } },
       { itemModelNumber: { $regex: value, $options: "i" } },
       { itemKey: { $regex: value, $options: "i" } },
+      { description: { $regex: value, $options: "i" } },
       { searchKeys: { $in: [value.toLowerCase()] } },
     ],
   };
@@ -238,6 +250,58 @@ function parseJsonField<T>(value: unknown, fallback: T): T {
   }
 
   return value as T;
+}
+
+function normalizeObjectIdArrayField(value: unknown): string[] {
+  if (value === undefined || value === null || value === "") {
+    return [];
+  }
+
+  let parsed: unknown = value;
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      parsed = trimmed;
+    }
+  }
+
+  if (Array.isArray(parsed)) {
+    return parsed.map((item) => norm(item)).filter(Boolean);
+  }
+
+  const single = norm(parsed);
+  return single ? [single] : [];
+}
+
+function validateObjectIdArray(
+  values: unknown,
+  fieldName: string,
+  res: Response,
+  options?: { required?: boolean }
+) {
+  const list = Array.isArray(values) ? values : [];
+  const required = options?.required ?? false;
+
+  if (required && list.length === 0) {
+    res.status(400).json({
+      success: false,
+      message: `${fieldName} must contain at least one id`,
+    });
+    return false;
+  }
+
+  for (const value of list) {
+    if (!validateRequiredObjectId(value, fieldName, res)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function normalizeImageItem(item: any): ImageItem | null {
@@ -344,11 +408,14 @@ function normalizeVariantAttribute(item: any): VariantAttribute | null {
 
 function normalizeVariantItem(item: any): VariantItem | null {
   const title = norm(item?.title);
+  const description = norm(item?.description);
   const attributes = normalizeArray<any>(item?.attributes)
     .map((attr) => normalizeVariantAttribute(attr))
     .filter(Boolean) as VariantAttribute[];
 
   const images = normalizeImages(item?.images);
+  const videos = normalizeImages(item?.videos);
+  const compatible = normalizeCompatibility(item?.compatible);
   const productInformation = normalizeProductInformation(
     item?.productInformation
   );
@@ -356,8 +423,11 @@ function normalizeVariantItem(item: any): VariantItem | null {
 
   if (
     !title &&
+    !description &&
     attributes.length === 0 &&
     images.length === 0 &&
+    videos.length === 0 &&
+    compatible.length === 0 &&
     productInformation.length === 0
   ) {
     return null;
@@ -365,8 +435,11 @@ function normalizeVariantItem(item: any): VariantItem | null {
 
   return {
     title,
+    description,
     attributes,
     images,
+    videos,
+    compatible,
     productInformation,
     isActive,
   };
@@ -399,14 +472,6 @@ function validateCompatibilityPayload(
 
 function validateVariantPayload(variant: VariantItem[], res: Response) {
   for (const item of variant) {
-    if (!Array.isArray(item.attributes) || item.attributes.length === 0) {
-      res.status(400).json({
-        success: false,
-        message: "Each variant must contain at least one attribute",
-      });
-      return false;
-    }
-
     for (const attr of item.attributes) {
       if (!attr.label || !attr.value) {
         res.status(400).json({
@@ -435,6 +500,10 @@ function validateVariantPayload(variant: VariantItem[], res: Response) {
           return false;
         }
       }
+    }
+
+    if (!validateCompatibilityPayload(item.compatible || [], res)) {
+      return false;
     }
   }
 
@@ -500,7 +569,7 @@ function getVariantUploadMap(req: Request) {
 
   for (const group of explicitGroups) {
     const variantIndex = Number(group?.variantIndex);
-    const imageField = norm(group?.imageField);
+    const imageField = norm(group?.fieldName ?? group?.imageField);
 
     if (!Number.isInteger(variantIndex) || variantIndex < 0 || !imageField) {
       continue;
@@ -527,8 +596,55 @@ function getVariantUploadMap(req: Request) {
   return map;
 }
 
+function getVariantVideoUploadMap(req: Request) {
+  const map = new Map<number, Express.Multer.File[]>();
+  const filesMap = parseFilesMap(req);
+  const explicitGroups = parseJsonField<VariantVideoGroup[]>(
+    req.body?.variantVideoGroups,
+    []
+  );
+
+  for (const group of explicitGroups) {
+    const variantIndex = Number(group?.variantIndex);
+    const videoField = norm(group?.fieldName ?? group?.videoField);
+
+    if (!Number.isInteger(variantIndex) || variantIndex < 0 || !videoField) {
+      continue;
+    }
+
+    const files = filesMap[videoField] || [];
+    if (!files.length) continue;
+
+    const existing = map.get(variantIndex) || [];
+    map.set(variantIndex, [...existing, ...files]);
+  }
+
+  for (const [fieldName, files] of Object.entries(filesMap)) {
+    const match = fieldName.match(/^variantVideos\[(\d+)\]$/);
+    if (!match || !files.length) continue;
+
+    const variantIndex = Number(match[1]);
+    if (!Number.isInteger(variantIndex) || variantIndex < 0) continue;
+
+    const existing = map.get(variantIndex) || [];
+    map.set(variantIndex, [...existing, ...files]);
+  }
+
+  return map;
+}
+
+function getUploadResourceType(file: Express.Multer.File) {
+  return String(file.mimetype || "").toLowerCase().startsWith("video/")
+    ? "video"
+    : "image";
+}
+
 async function uploadSingleFile(file: Express.Multer.File): Promise<ImageItem> {
-  return uploadImage(file, "catalog/products");
+  return uploadImage(
+    file,
+    "catalog/products",
+    getUploadResourceType(file)
+  );
 }
 
 async function uploadImages(files: Express.Multer.File[]) {
@@ -566,6 +682,31 @@ async function attachUploadedImagesToVariant(
   return next;
 }
 
+async function attachUploadedVideosToVariant(
+  req: Request,
+  variant: VariantItem[]
+): Promise<VariantItem[]> {
+  const uploadsByVariant = getVariantVideoUploadMap(req);
+
+  if (!uploadsByVariant.size) {
+    return variant;
+  }
+
+  const next = variant.map((item) => ({
+    ...item,
+    videos: Array.isArray(item.videos) ? [...item.videos] : [],
+  }));
+
+  for (const [variantIndex, files] of uploadsByVariant.entries()) {
+    if (!next[variantIndex]) continue;
+
+    const uploadedVideos = await uploadImages(files);
+    next[variantIndex].videos.push(...uploadedVideos);
+  }
+
+  return next;
+}
+
 async function attachUploadedMainImages(
   req: Request,
   existingImages: ImageItem[] = []
@@ -585,6 +726,25 @@ async function attachUploadedMainImages(
   return [...existingImages, ...uploaded];
 }
 
+async function attachUploadedMainVideos(
+  req: Request,
+  existingVideos: ImageItem[] = []
+): Promise<ImageItem[]> {
+  const filesMap = parseFilesMap(req);
+
+  const mainFiles = [
+    ...(filesMap["productVideos"] || []),
+    ...(filesMap["videos"] || []),
+  ];
+
+  if (!mainFiles.length) {
+    return existingVideos;
+  }
+
+  const uploaded = await uploadImages(mainFiles);
+  return [...existingVideos, ...uploaded];
+}
+
 function buildCreatePayload(body: any, user: any) {
   const masterAdmin = isMasterAdmin(user);
   const requestedIsActive = parseOptionalBoolean(
@@ -598,6 +758,7 @@ function buildCreatePayload(body: any, user: any) {
 
   const searchKeys = parseJsonField<string[]>(body?.searchKeys, []);
   const images = parseJsonField<ImageItem[]>(body?.images, []);
+  const videos = parseJsonField<ImageItem[]>(body?.videos, []);
   const compatible = parseJsonField<CompatibilityGroup[]>(body?.compatible, []);
   const variant = parseJsonField<VariantItem[]>(body?.variant, []);
   const productInformation = parseJsonField<ProductInformationSection[]>(
@@ -612,16 +773,17 @@ function buildCreatePayload(body: any, user: any) {
     itemName: norm(body?.itemName),
     itemModelNumber: norm(body?.itemModelNumber),
     itemKey: normalizeText(body?.itemKey),
+    description: norm(body?.description),
     searchKeys: normalizeArray<string>(searchKeys)
       .map((item) => normalizeText(item))
       .filter(Boolean),
     masterCategoryId: body?.masterCategoryId ?? null,
     categoryId: body?.categoryId ?? null,
     subcategoryId: body?.subcategoryId ?? null,
-    productTypeId: body?.productTypeId ?? null,
-    brandId: body?.brandId ?? null,
-    modelId: body?.modelId ?? null,
+    brandId: normalizeObjectIdArrayField(body?.brandId),
+    modelId: normalizeObjectIdArrayField(body?.modelId),
     images: normalizeImages(images),
+    videos: normalizeImages(videos),
     compatible: normalizeCompatibility(compatible),
     variant: normalizeVariant(variant),
     productInformation: normalizeProductInformation(productInformation),
@@ -655,6 +817,10 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
     payload.itemKey = normalizeText(body.itemKey);
   }
 
+  if (body?.description !== undefined) {
+    payload.description = norm(body.description);
+  }
+
   if (body?.searchKeys !== undefined) {
     payload.searchKeys = normalizeArray<string>(
       parseJsonField<string[]>(body.searchKeys, [])
@@ -675,20 +841,20 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
     payload.subcategoryId = body.subcategoryId;
   }
 
-  if (body?.productTypeId !== undefined) {
-    payload.productTypeId = body.productTypeId;
-  }
-
   if (body?.brandId !== undefined) {
-    payload.brandId = body.brandId;
+    payload.brandId = normalizeObjectIdArrayField(body.brandId);
   }
 
   if (body?.modelId !== undefined) {
-    payload.modelId = body.modelId;
+    payload.modelId = normalizeObjectIdArrayField(body.modelId);
   }
 
   if (body?.images !== undefined) {
     payload.images = normalizeImages(parseJsonField<ImageItem[]>(body.images, []));
+  }
+
+  if (body?.videos !== undefined) {
+    payload.videos = normalizeImages(parseJsonField<ImageItem[]>(body.videos, []));
   }
 
   if (body?.compatible !== undefined) {
@@ -761,6 +927,7 @@ function hasConfigurationFields(value: any) {
   return [
     "configurationMode",
     "images",
+    "videos",
     "compatible",
     "variant",
     "productInformation",
@@ -773,6 +940,7 @@ function sanitizePayloadByConfigurationMode<
     compatible?: unknown;
     variant?: unknown;
     images?: unknown;
+    videos?: unknown;
     productInformation?: unknown;
   },
 >(
@@ -789,12 +957,14 @@ function sanitizePayloadByConfigurationMode<
   if (configurationMode === "variant") {
     delete payload.compatible;
     delete payload.images;
+    delete payload.videos;
     delete payload.productInformation;
     return payload;
   }
 
   if (configurationMode === "variantCompatibility") {
     delete payload.images;
+    delete payload.videos;
     delete payload.productInformation;
     return payload;
   }
@@ -817,9 +987,11 @@ function buildUnsetByConfigurationMode(
   if (configurationMode === "variant") {
     $unset.compatible = 1;
     $unset.images = 1;
+    $unset.videos = 1;
     $unset.productInformation = 1;
   } else if (configurationMode === "variantCompatibility") {
     $unset.images = 1;
+    $unset.videos = 1;
     $unset.productInformation = 1;
   } else if (configurationMode === "productMediaInfoCompatibility") {
     $unset.variant = 1;
@@ -837,6 +1009,7 @@ function validateConfigurationModePayload(
     compatible?: CompatibilityGroup[];
     variant?: VariantItem[];
     images?: ImageItem[];
+    videos?: ImageItem[];
     productInformation?: ProductInformationSection[];
   },
   res: Response
@@ -848,6 +1021,7 @@ function validateConfigurationModePayload(
   const compatible = Array.isArray(payload.compatible) ? payload.compatible : [];
   const variant = Array.isArray(payload.variant) ? payload.variant : [];
   const images = Array.isArray(payload.images) ? payload.images : [];
+  const videos = Array.isArray(payload.videos) ? payload.videos : [];
   const productInformation = Array.isArray(payload.productInformation)
     ? payload.productInformation
     : [];
@@ -867,7 +1041,8 @@ function validateConfigurationModePayload(
   if (
     (configurationMode === "variantCompatibility" ||
       configurationMode === "productMediaInfoCompatibility") &&
-    compatible.length === 0
+    compatible.length === 0 &&
+    !variant.some((item) => Array.isArray(item.compatible) && item.compatible.length > 0)
   ) {
     res.status(400).json({
       success: false,
@@ -881,6 +1056,7 @@ function validateConfigurationModePayload(
     (configurationMode === "productMediaInfo" ||
       configurationMode === "productMediaInfoCompatibility") &&
     images.length === 0 &&
+    videos.length === 0 &&
     productInformation.length === 0
   ) {
     res.status(400).json({
@@ -920,15 +1096,19 @@ function validateCreatePayload(
     return false;
   }
 
-  if (!validateRequiredObjectId(payload.productTypeId, "productTypeId", res)) {
+  if (
+    !validateObjectIdArray(payload.brandId, "brandId", res, {
+      required: true,
+    })
+  ) {
     return false;
   }
 
-  if (!validateRequiredObjectId(payload.brandId, "brandId", res)) {
-    return false;
-  }
-
-  if (!validateRequiredObjectId(payload.modelId, "modelId", res)) {
+  if (
+    !validateObjectIdArray(payload.modelId, "modelId", res, {
+      required: true,
+    })
+  ) {
     return false;
   }
 
@@ -954,22 +1134,33 @@ function validateCreatePayload(
 }
 
 function validateUpdatePayload(payload: Record<string, unknown>, res: Response) {
-  const objectIdFields = [
+  const singleObjectIdFields = [
     "masterCategoryId",
     "categoryId",
     "subcategoryId",
-    "productTypeId",
-    "brandId",
-    "modelId",
   ] as const;
 
-  for (const field of objectIdFields) {
+  for (const field of singleObjectIdFields) {
     if (
       payload[field] !== undefined &&
       !validateRequiredObjectId(payload[field], field, res)
     ) {
       return false;
     }
+  }
+
+  if (
+    payload.brandId !== undefined &&
+    !validateObjectIdArray(payload.brandId, "brandId", res)
+  ) {
+    return false;
+  }
+
+  if (
+    payload.modelId !== undefined &&
+    !validateObjectIdArray(payload.modelId, "modelId", res)
+  ) {
+    return false;
   }
 
   if (
@@ -1004,6 +1195,7 @@ function validateUpdatePayload(payload: Record<string, unknown>, res: Response) 
           compatible?: CompatibilityGroup[];
           variant?: VariantItem[];
           images?: ImageItem[];
+          videos?: ImageItem[];
           productInformation?: ProductInformationSection[];
         },
         res
@@ -1080,7 +1272,6 @@ const productPopulate = [
   { path: "masterCategoryId", select: "name" },
   { path: "categoryId", select: "name" },
   { path: "subcategoryId", select: "name categoryId" },
-  { path: "productTypeId", select: "name" },
   { path: "brandId", select: "name" },
   { path: "modelId", select: "name" },
 ];
@@ -1181,8 +1372,20 @@ export async function createProduct(req: Request, res: Response) {
       );
     }
 
+    if (payload.videos !== undefined) {
+      payload.videos = await attachUploadedMainVideos(
+        req,
+        payload.videos as ImageItem[]
+      );
+    }
+
     if (payload.variant !== undefined) {
       payload.variant = await attachUploadedImagesToVariant(
+        req,
+        payload.variant as VariantItem[]
+      );
+
+      payload.variant = await attachUploadedVideosToVariant(
         req,
         payload.variant as VariantItem[]
       );
@@ -1263,8 +1466,20 @@ export async function updateProduct(req: Request, res: Response) {
       );
     }
 
+    if (payload.videos !== undefined) {
+      payload.videos = await attachUploadedMainVideos(
+        req,
+        payload.videos as ImageItem[]
+      );
+    }
+
     if (payload.variant !== undefined) {
       payload.variant = await attachUploadedImagesToVariant(
+        req,
+        payload.variant as VariantItem[]
+      );
+
+      payload.variant = await attachUploadedVideosToVariant(
         req,
         payload.variant as VariantItem[]
       );
