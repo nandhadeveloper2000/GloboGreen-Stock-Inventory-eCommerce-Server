@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { cleanupLegacyProductIndexes } from "../models/product.model";
 
 export async function connectDB() {
   const uri = process.env.DATABASE_URI;
@@ -8,5 +9,7 @@ export async function connectDB() {
     autoIndex: process.env.NODE_ENV !== "production",
   });
 
-  console.log("✅ MongoDB connected");
+  await cleanupLegacyProductIndexes();
+
+  console.log("MongoDB connected");
 }

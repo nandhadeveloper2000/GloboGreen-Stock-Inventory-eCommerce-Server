@@ -75,17 +75,6 @@ function normalizeShopType(value: any) {
   return shopType;
 }
 
-/**
- * FINAL BILLING RULE:
- *
- * enableGSTBilling false => billingType always NON_GST
- * enableGSTBilling true  => billingType GST or BOTH
- *
- * Normal shop create:
- * enableGSTBilling: false
- * billingType: NON_GST
- * gstNumber: ""
- */
 function normalizeBillingType(value: any, enableGSTBilling: boolean) {
   if (!enableGSTBilling) {
     return "NON_GST";
@@ -133,6 +122,43 @@ async function getActorShopId(user?: AuthUser) {
   return String((staff as any).shopId || "");
 }
 
+function getEntityId(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value instanceof mongoose.Types.ObjectId) return String(value);
+
+  if (typeof value === "object") {
+    const record = value as {
+      _id?: unknown;
+      id?: unknown;
+      toString?: () => string;
+    };
+
+    const nestedId = getEntityId(record._id) || getEntityId(record.id);
+
+    if (nestedId) {
+      return nestedId;
+    }
+
+    if (typeof record.toString === "function") {
+      const stringValue = record.toString();
+
+      if (isObjectId(stringValue)) {
+        return stringValue;
+      }
+    }
+  }
+
+  const fallback = String(value);
+  return isObjectId(fallback) ? fallback : "";
+}
+
+function getShopOwnerAccountId(shop: unknown): string {
+  if (!shop || typeof shop !== "object") return "";
+
+  return getEntityId((shop as { shopOwnerAccountId?: unknown }).shopOwnerAccountId);
+}
+
 async function canAccessShop(user: AuthUser | undefined, shop: any) {
   if (!user) {
     return { ok: false as const, message: "Unauthorized" };
@@ -143,7 +169,7 @@ async function canAccessShop(user: AuthUser | undefined, shop: any) {
   }
 
   if (user.role === "SHOP_OWNER") {
-    if (String(shop.shopOwnerAccountId) === String(user.sub)) {
+    if (getShopOwnerAccountId(shop) === String(user.sub)) {
       return { ok: true as const };
     }
 
@@ -181,7 +207,7 @@ async function canUpdateShop(user: AuthUser | undefined, shop: any) {
   }
 
   if (user.role === "SHOP_OWNER") {
-    if (String(shop.shopOwnerAccountId) === String(user.sub)) {
+    if (getShopOwnerAccountId(shop) === String(user.sub)) {
       return { ok: true as const };
     }
 
@@ -362,7 +388,7 @@ export async function createShop(req: Request, res: Response) {
     if (!billingType) {
       return res.status(400).json({
         success: false,
-        message: "billingType must be GST, NON_GST, or BOTH",
+        message: "billingType must be GST, NON_GST",
       });
     }
 
@@ -683,7 +709,7 @@ export async function updateShop(req: Request, res: Response) {
       if (!billingType) {
         return res.status(400).json({
           success: false,
-          message: "billingType must be GST, NON_GST, or BOTH",
+          message: "billingType must be GST, NON_GST",
         });
       }
 
@@ -799,7 +825,7 @@ export async function deleteShop(req: Request, res: Response) {
         u.role === "MASTER_ADMIN" ||
         u.role === "MANAGER" ||
         (u.role === "SHOP_OWNER" &&
-          String((doc as any).shopOwnerAccountId) === String(u.sub))
+          getShopOwnerAccountId(doc) === String(u.sub))
       )
     ) {
       return res.status(403).json({
@@ -809,7 +835,7 @@ export async function deleteShop(req: Request, res: Response) {
     }
 
     await ShopOwnerModel.updateOne(
-      { _id: (doc as any).shopOwnerAccountId },
+      { _id: getShopOwnerAccountId(doc) },
       { $pull: { shopIds: doc._id } }
     );
 
@@ -877,7 +903,7 @@ export async function shopFrontUpload(req: Request, res: Response) {
       });
     }
 
-    if (String((shop as any).shopOwnerAccountId) !== String(u.sub)) {
+    if (getShopOwnerAccountId(shop) !== String(u.sub)) {
       return res.status(403).json({
         success: false,
         message: "Forbidden",
@@ -935,7 +961,7 @@ export async function shopFrontRemove(req: Request, res: Response) {
       });
     }
 
-    if (String((shop as any).shopOwnerAccountId) !== String(u.sub)) {
+    if (getShopOwnerAccountId(shop) !== String(u.sub)) {
       return res.status(403).json({
         success: false,
         message: "Forbidden",
@@ -1117,7 +1143,7 @@ export async function shopDocsUpload(req: Request, res: Response) {
       });
     }
 
-    if (String((shop as any).shopOwnerAccountId) !== String(u.sub)) {
+    if (getShopOwnerAccountId(shop) !== String(u.sub)) {
       return res.status(403).json({
         success: false,
         message: "Forbidden",
@@ -1211,7 +1237,7 @@ export async function shopDocsRemove(req: Request, res: Response) {
       });
     }
 
-    if (String((shop as any).shopOwnerAccountId) !== String(u.sub)) {
+    if (getShopOwnerAccountId(shop) !== String(u.sub)) {
       return res.status(403).json({
         success: false,
         message: "Forbidden",

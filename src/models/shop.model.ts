@@ -7,7 +7,7 @@ export const SHOP_TYPES = [
   "WHOLESALE_SHOP",
 ] as const;
 
-export const BILLING_TYPES = ["GST", "NON_GST", "BOTH"] as const;
+export const BILLING_TYPES = ["GST", "NON_GST"] as const;
 
 const AddressSchema = new Schema(
   {

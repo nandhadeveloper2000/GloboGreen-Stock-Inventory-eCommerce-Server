@@ -11,6 +11,7 @@ const isObjectId = (id: unknown) =>
 
 const MASTER_ADMIN_ROLE = "MASTER_ADMIN";
 const INTERNAL_CATALOG_ROLES = new Set(["MASTER_ADMIN", "MANAGER"]);
+
 const PRODUCT_APPROVAL_STATUSES = [
   "PENDING",
   "APPROVED",
@@ -20,8 +21,12 @@ const PRODUCT_APPROVAL_STATUSES = [
 const DEFAULT_PRODUCT_CONFIGURATION_MODE = "variant";
 
 type ProductApprovalStatus = (typeof PRODUCT_APPROVAL_STATUSES)[number];
-type ProductConfigurationMode =
-  (typeof PRODUCT_CONFIGURATION_MODES)[number];
+type ProductConfigurationMode = (typeof PRODUCT_CONFIGURATION_MODES)[number];
+
+const COMPATIBILITY_CONFIGURATION_MODES: ProductConfigurationMode[] = [
+  "variantCompatibility",
+  "productMediaInfoCompatibility",
+];
 
 type ImageItem = {
   url: string;
@@ -74,6 +79,8 @@ type VariantVideoGroup = {
   fieldName?: string;
   fileNames?: string[];
 };
+
+/* ---------------- HELPERS ---------------- */
 
 function norm(value: unknown) {
   return String(value ?? "").trim();
@@ -152,6 +159,42 @@ function normalizeConfigurationMode(
   return fallback;
 }
 
+function isCompatibilityConfigurationMode(mode: unknown) {
+  return COMPATIBILITY_CONFIGURATION_MODES.includes(
+    normalizeConfigurationMode(mode) as ProductConfigurationMode
+  );
+}
+
+function hasAtLeastOneCompatibleModel(compatible: CompatibilityGroup[]) {
+  return compatible.some(
+    (item) =>
+      Boolean(item.brandId) &&
+      Array.isArray(item.modelId) &&
+      item.modelId.length > 0
+  );
+}
+
+function hasAtLeastOneCompatibleModelDeep(payload: {
+  compatible?: CompatibilityGroup[];
+  variant?: VariantItem[];
+}) {
+  const rootCompatible = Array.isArray(payload.compatible)
+    ? payload.compatible
+    : [];
+
+  if (hasAtLeastOneCompatibleModel(rootCompatible)) {
+    return true;
+  }
+
+  const variant = Array.isArray(payload.variant) ? payload.variant : [];
+
+  return variant.some((variantItem) =>
+    hasAtLeastOneCompatibleModel(
+      Array.isArray(variantItem.compatible) ? variantItem.compatible : []
+    )
+  );
+}
+
 function isGlobalProductActive(doc: any) {
   if (!doc) return false;
   if (typeof doc.isActiveGlobal === "boolean") return doc.isActiveGlobal;
@@ -223,13 +266,37 @@ function validateRequiredObjectId(
   res: Response
 ) {
   if (!isObjectId(value)) {
-    res
-      .status(400)
-      .json({ success: false, message: `Invalid ${fieldName}` });
+    res.status(400).json({
+      success: false,
+      message: `Invalid ${fieldName}`,
+    });
     return false;
   }
 
   return true;
+}
+
+function validateOptionalObjectId(
+  value: unknown,
+  fieldName: string,
+  res: Response,
+  options?: { required?: boolean; customRequiredMessage?: string }
+) {
+  const required = options?.required ?? false;
+
+  if (value === undefined || value === null || value === "") {
+    if (required) {
+      res.status(400).json({
+        success: false,
+        message: options?.customRequiredMessage || `${fieldName} is required`,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  return validateRequiredObjectId(value, fieldName, res);
 }
 
 function normalizeArray<T>(value: unknown): T[] {
@@ -250,6 +317,35 @@ function parseJsonField<T>(value: unknown, fallback: T): T {
   }
 
   return value as T;
+}
+
+function normalizeObjectIdField(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    try {
+      const parsed = JSON.parse(trimmed);
+
+      if (Array.isArray(parsed)) {
+        return parsed.length ? norm(parsed[0]) || null : null;
+      }
+
+      return norm(parsed) || null;
+    } catch {
+      return trimmed;
+    }
+  }
+
+  if (Array.isArray(value)) {
+    return value.length ? norm(value[0]) || null : null;
+  }
+
+  return norm(value) || null;
 }
 
 function normalizeObjectIdArrayField(value: unknown): string[] {
@@ -282,7 +378,7 @@ function validateObjectIdArray(
   values: unknown,
   fieldName: string,
   res: Response,
-  options?: { required?: boolean }
+  options?: { required?: boolean; customRequiredMessage?: string }
 ) {
   const list = Array.isArray(values) ? values : [];
   const required = options?.required ?? false;
@@ -290,7 +386,9 @@ function validateObjectIdArray(
   if (required && list.length === 0) {
     res.status(400).json({
       success: false,
-      message: `${fieldName} must contain at least one id`,
+      message:
+        options?.customRequiredMessage ||
+        `${fieldName} must contain at least one id`,
     });
     return false;
   }
@@ -303,6 +401,8 @@ function validateObjectIdArray(
 
   return true;
 }
+
+/* ---------------- NORMALIZERS ---------------- */
 
 function normalizeImageItem(item: any): ImageItem | null {
   const url = norm(item?.url);
@@ -373,9 +473,11 @@ function normalizeProductInformation(
 
 function normalizeCompatibilityItem(item: any): CompatibilityGroup | null {
   const brandId = norm(item?.brandId);
-  const modelId = normalizeArray<any>(item?.modelId)
-    .map((id) => norm(id))
-    .filter(Boolean);
+
+  const modelId = normalizeObjectIdArrayField(
+    item?.modelId ?? item?.modelIds ?? item?.models
+  );
+
   const notes = norm(item?.notes);
   const isActive = parseOptionalBoolean(item?.isActive) ?? true;
 
@@ -409,6 +511,7 @@ function normalizeVariantAttribute(item: any): VariantAttribute | null {
 function normalizeVariantItem(item: any): VariantItem | null {
   const title = norm(item?.title);
   const description = norm(item?.description);
+
   const attributes = normalizeArray<any>(item?.attributes)
     .map((attr) => normalizeVariantAttribute(attr))
     .filter(Boolean) as VariantAttribute[];
@@ -419,6 +522,7 @@ function normalizeVariantItem(item: any): VariantItem | null {
   const productInformation = normalizeProductInformation(
     item?.productInformation
   );
+
   const isActive = parseOptionalBoolean(item?.isActive) ?? true;
 
   if (
@@ -451,16 +555,32 @@ function normalizeVariant(value: unknown): VariantItem[] {
     .filter(Boolean) as VariantItem[];
 }
 
+/* ---------------- VALIDATION ---------------- */
+
 function validateCompatibilityPayload(
   compatible: CompatibilityGroup[],
-  res: Response
+  res: Response,
+  options?: { requireModel?: boolean }
 ) {
+  const requireModel = options?.requireModel ?? false;
+
   for (const item of compatible) {
     if (!validateRequiredObjectId(item.brandId, "compatible.brandId", res)) {
       return false;
     }
 
-    for (const modelId of item.modelId) {
+    if (
+      requireModel &&
+      (!Array.isArray(item.modelId) || item.modelId.length === 0)
+    ) {
+      res.status(400).json({
+        success: false,
+        message: "Please select at least one compatible model",
+      });
+      return false;
+    }
+
+    for (const modelId of item.modelId || []) {
       if (!validateRequiredObjectId(modelId, "compatible.modelId", res)) {
         return false;
       }
@@ -537,6 +657,8 @@ function validateProductInformationPayload(
   return true;
 }
 
+/* ---------------- FILE UPLOAD HELPERS ---------------- */
+
 function parseFilesMap(req: Request) {
   const rawFiles = (req as any).files;
   const map: Record<string, Express.Multer.File[]> = {};
@@ -549,6 +671,7 @@ function parseFilesMap(req: Request) {
       if (!map[field]) map[field] = [];
       map[field].push(file);
     }
+
     return map;
   }
 
@@ -562,6 +685,7 @@ function parseFilesMap(req: Request) {
 function getVariantUploadMap(req: Request) {
   const map = new Map<number, Express.Multer.File[]>();
   const filesMap = parseFilesMap(req);
+
   const explicitGroups = parseJsonField<VariantImageGroup[]>(
     req.body?.variantImageGroups,
     []
@@ -599,6 +723,7 @@ function getVariantUploadMap(req: Request) {
 function getVariantVideoUploadMap(req: Request) {
   const map = new Map<number, Express.Multer.File[]>();
   const filesMap = parseFilesMap(req);
+
   const explicitGroups = parseJsonField<VariantVideoGroup[]>(
     req.body?.variantVideoGroups,
     []
@@ -640,11 +765,7 @@ function getUploadResourceType(file: Express.Multer.File) {
 }
 
 async function uploadSingleFile(file: Express.Multer.File): Promise<ImageItem> {
-  return uploadImage(
-    file,
-    "catalog/products",
-    getUploadResourceType(file)
-  );
+  return uploadImage(file, "catalog/products", getUploadResourceType(file));
 }
 
 async function uploadImages(files: Express.Multer.File[]) {
@@ -745,14 +866,19 @@ async function attachUploadedMainVideos(
   return [...existingVideos, ...uploaded];
 }
 
+/* ---------------- PAYLOAD BUILDERS ---------------- */
+
 function buildCreatePayload(body: any, user: any) {
   const masterAdmin = isMasterAdmin(user);
+
   const requestedIsActive = parseOptionalBoolean(
     body?.isActiveGlobal ?? body?.isActive
   );
+
   const approvalStatus = masterAdmin
     ? normalizeApprovalStatus(body?.approvalStatus, "APPROVED")
     : "PENDING";
+
   const isActiveGlobal =
     approvalStatus === "APPROVED" ? requestedIsActive ?? true : false;
 
@@ -765,32 +891,40 @@ function buildCreatePayload(body: any, user: any) {
     body?.productInformation,
     []
   );
-  const configurationMode = normalizeConfigurationMode(
-    body?.configurationMode
-  );
+
+  const configurationMode = normalizeConfigurationMode(body?.configurationMode);
 
   return {
     itemName: norm(body?.itemName),
     itemModelNumber: norm(body?.itemModelNumber),
     itemKey: normalizeText(body?.itemKey),
     description: norm(body?.description),
+
     searchKeys: normalizeArray<string>(searchKeys)
       .map((item) => normalizeText(item))
       .filter(Boolean),
+
     masterCategoryId: body?.masterCategoryId ?? null,
     categoryId: body?.categoryId ?? null,
     subcategoryId: body?.subcategoryId ?? null,
-    brandId: normalizeObjectIdArrayField(body?.brandId),
-    modelId: normalizeObjectIdArrayField(body?.modelId),
+
+    // Product brand: example CEDO Back Cover
+    brandId: normalizeObjectIdField(body?.brandId),
+
+    // Main product model. Optional for compatibility products.
+    modelId: normalizeObjectIdField(body?.modelId),
+
     images: normalizeImages(images),
     videos: normalizeImages(videos),
     compatible: normalizeCompatibility(compatible),
     variant: normalizeVariant(variant),
     productInformation: normalizeProductInformation(productInformation),
+
     configurationMode,
     approvalStatus,
     isActiveGlobal,
     isActive: isActiveGlobal,
+
     ...createdByFromUser(user),
   };
 }
@@ -842,19 +976,23 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
   }
 
   if (body?.brandId !== undefined) {
-    payload.brandId = normalizeObjectIdArrayField(body.brandId);
+    payload.brandId = normalizeObjectIdField(body.brandId);
   }
 
   if (body?.modelId !== undefined) {
-    payload.modelId = normalizeObjectIdArrayField(body.modelId);
+    payload.modelId = normalizeObjectIdField(body.modelId);
   }
 
   if (body?.images !== undefined) {
-    payload.images = normalizeImages(parseJsonField<ImageItem[]>(body.images, []));
+    payload.images = normalizeImages(
+      parseJsonField<ImageItem[]>(body.images, [])
+    );
   }
 
   if (body?.videos !== undefined) {
-    payload.videos = normalizeImages(parseJsonField<ImageItem[]>(body.videos, []));
+    payload.videos = normalizeImages(
+      parseJsonField<ImageItem[]>(body.videos, [])
+    );
   }
 
   if (body?.compatible !== undefined) {
@@ -923,6 +1061,8 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
   return payload;
 }
 
+/* ---------------- CONFIGURATION MODE CLEANUP ---------------- */
+
 function hasConfigurationFields(value: any) {
   return [
     "configurationMode",
@@ -974,8 +1114,12 @@ function sanitizePayloadByConfigurationMode<
     return payload;
   }
 
-  delete payload.variant;
-  delete payload.compatible;
+  if (configurationMode === "productMediaInfo") {
+    delete payload.variant;
+    delete payload.compatible;
+    return payload;
+  }
+
   return payload;
 }
 
@@ -1003,6 +1147,8 @@ function buildUnsetByConfigurationMode(
   return $unset;
 }
 
+/* ---------------- MAIN PAYLOAD VALIDATION ---------------- */
+
 function validateConfigurationModePayload(
   payload: {
     configurationMode?: unknown;
@@ -1018,6 +1164,7 @@ function validateConfigurationModePayload(
     payload.configurationMode,
     DEFAULT_PRODUCT_CONFIGURATION_MODE
   );
+
   const compatible = Array.isArray(payload.compatible) ? payload.compatible : [];
   const variant = Array.isArray(payload.variant) ? payload.variant : [];
   const images = Array.isArray(payload.images) ? payload.images : [];
@@ -1033,7 +1180,8 @@ function validateConfigurationModePayload(
   ) {
     res.status(400).json({
       success: false,
-      message: "At least one variant is required for the selected configuration option",
+      message:
+        "At least one variant is required for the selected configuration option",
     });
     return false;
   }
@@ -1041,13 +1189,11 @@ function validateConfigurationModePayload(
   if (
     (configurationMode === "variantCompatibility" ||
       configurationMode === "productMediaInfoCompatibility") &&
-    compatible.length === 0 &&
-    !variant.some((item) => Array.isArray(item.compatible) && item.compatible.length > 0)
+    !hasAtLeastOneCompatibleModelDeep({ compatible, variant })
   ) {
     res.status(400).json({
       success: false,
-      message:
-        "At least one compatible brand/model is required for the selected configuration option",
+      message: "Please select at least one compatible brand and model",
     });
     return false;
   }
@@ -1074,6 +1220,10 @@ function validateCreatePayload(
   payload: ReturnType<typeof buildCreatePayload>,
   res: Response
 ) {
+  const compatibilityMode = isCompatibilityConfigurationMode(
+    payload.configurationMode
+  );
+
   if (!payload.itemName || !payload.itemModelNumber) {
     res.status(400).json({
       success: false,
@@ -1097,22 +1247,49 @@ function validateCreatePayload(
   }
 
   if (
-    !validateObjectIdArray(payload.brandId, "brandId", res, {
+    !validateOptionalObjectId(payload.brandId, "brandId", res, {
       required: true,
+      customRequiredMessage: "Please select product brand",
+    })
+  ) {
+    return false;
+  }
+
+  /*
+    Normal product:
+      Product Brand = Vivo
+      Main Model = V60 5G
+      modelId required.
+
+    Compatibility product:
+      Product Brand = CEDO Back Cover
+      Main Model = null
+      Compatible Brand = Vivo
+      Compatible Models = V60 5G
+      modelId optional.
+  */
+  if (
+    !validateOptionalObjectId(payload.modelId, "modelId", res, {
+      required: !compatibilityMode,
+      customRequiredMessage: "Please select model",
     })
   ) {
     return false;
   }
 
   if (
-    !validateObjectIdArray(payload.modelId, "modelId", res, {
-      required: true,
+    !validateCompatibilityPayload(payload.compatible || [], res, {
+      requireModel: compatibilityMode,
     })
   ) {
     return false;
   }
 
-  if (!validateCompatibilityPayload(payload.compatible || [], res)) {
+  if (compatibilityMode && !hasAtLeastOneCompatibleModelDeep(payload)) {
+    res.status(400).json({
+      success: false,
+      message: "Please select at least one compatible brand and model",
+    });
     return false;
   }
 
@@ -1120,9 +1297,7 @@ function validateCreatePayload(
     return false;
   }
 
-  if (
-    !validateProductInformationPayload(payload.productInformation || [], res)
-  ) {
+  if (!validateProductInformationPayload(payload.productInformation || [], res)) {
     return false;
   }
 
@@ -1133,7 +1308,19 @@ function validateCreatePayload(
   return true;
 }
 
-function validateUpdatePayload(payload: Record<string, unknown>, res: Response) {
+function validateUpdatePayload(
+  payload: Record<string, unknown>,
+  res: Response,
+  existing?: any
+) {
+  const finalConfigurationMode = normalizeConfigurationMode(
+    payload.configurationMode ?? existing?.configurationMode,
+    DEFAULT_PRODUCT_CONFIGURATION_MODE
+  );
+
+  const compatibilityMode =
+    isCompatibilityConfigurationMode(finalConfigurationMode);
+
   const singleObjectIdFields = [
     "masterCategoryId",
     "categoryId",
@@ -1151,21 +1338,33 @@ function validateUpdatePayload(payload: Record<string, unknown>, res: Response) 
 
   if (
     payload.brandId !== undefined &&
-    !validateObjectIdArray(payload.brandId, "brandId", res)
+    !validateOptionalObjectId(payload.brandId, "brandId", res, {
+      required: true,
+      customRequiredMessage: "Please select product brand",
+    })
   ) {
     return false;
   }
 
   if (
     payload.modelId !== undefined &&
-    !validateObjectIdArray(payload.modelId, "modelId", res)
+    !validateOptionalObjectId(payload.modelId, "modelId", res, {
+      required: !compatibilityMode,
+      customRequiredMessage: "Please select model",
+    })
   ) {
     return false;
   }
 
   if (
     payload.compatible !== undefined &&
-    !validateCompatibilityPayload(payload.compatible as CompatibilityGroup[], res)
+    !validateCompatibilityPayload(
+      payload.compatible as CompatibilityGroup[],
+      res,
+      {
+        requireModel: compatibilityMode,
+      }
+    )
   ) {
     return false;
   }
@@ -1207,6 +1406,8 @@ function validateUpdatePayload(payload: Record<string, unknown>, res: Response) 
 
   return true;
 }
+
+/* ---------------- DUPLICATE + ERROR HELPERS ---------------- */
 
 async function findDuplicateProduct(params: {
   itemModelNumber?: string;
@@ -1255,6 +1456,7 @@ function buildDuplicateResponse(res: Response, duplicate: any) {
 
 function buildMongoDuplicateErrorResponse(res: Response, error: any) {
   const duplicateField = Object.keys(error?.keyPattern || {})[0] || "unknown";
+
   const duplicateValue =
     error?.keyValue?.[duplicateField] !== undefined
       ? error.keyValue[duplicateField]
@@ -1268,12 +1470,30 @@ function buildMongoDuplicateErrorResponse(res: Response, error: any) {
   });
 }
 
+function isParallelArrayIndexError(error: any) {
+  return /cannot index parallel arrays/i.test(String(error?.message || ""));
+}
+
+function buildParallelArrayIndexErrorResponse(res: Response) {
+  return res.status(500).json({
+    success: false,
+    message:
+      "Legacy MongoDB product index conflict detected for brandId/modelId. Restart the server once so the index cleanup can run, then retry.",
+  });
+}
+
+/* ---------------- POPULATE ---------------- */
+
 const productPopulate = [
   { path: "masterCategoryId", select: "name" },
   { path: "categoryId", select: "name" },
   { path: "subcategoryId", select: "name categoryId" },
   { path: "brandId", select: "name" },
-  { path: "modelId", select: "name" },
+  { path: "modelId", select: "name brandId" },
+  { path: "compatible.brandId", select: "name" },
+  { path: "compatible.modelId", select: "name brandId" },
+  { path: "variant.compatible.brandId", select: "name" },
+  { path: "variant.compatible.modelId", select: "name brandId" },
 ];
 
 function applyProductPopulate(query: any) {
@@ -1283,14 +1503,18 @@ function applyProductPopulate(query: any) {
   );
 }
 
+/* ---------------- CONTROLLERS ---------------- */
+
 /** LIST PRODUCTS */
 export async function listProducts(req: Request, res: Response) {
   try {
     const q = String(req.query?.q ?? "");
     const canViewAll = canViewPendingProducts((req as any).user);
+
     const isActiveQuery = parseOptionalBoolean(
       req.query?.isActiveGlobal ?? req.query?.isActive
     );
+
     const approvalStatusQuery = req.query?.approvalStatus;
 
     const filter = mergeFilters(
@@ -1314,9 +1538,15 @@ export async function listProducts(req: Request, res: Response) {
       ProductModel.find(filter).sort({ createdAt: -1 }).limit(100)
     );
 
-    return res.json({ success: true, data: rows });
+    return res.json({
+      success: true,
+      data: rows,
+    });
   } catch (e: any) {
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 }
 
@@ -1326,22 +1556,30 @@ export async function getProductById(req: Request, res: Response) {
     const id = getSingleParam(req.params.id);
 
     if (!isObjectId(id)) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid product id" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid product id",
+      });
     }
 
     const doc = await applyProductPopulate(ProductModel.findById(id));
 
     if (!doc) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Product not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
     }
 
-    return res.json({ success: true, data: doc });
+    return res.json({
+      success: true,
+      data: doc,
+    });
   } catch (e: any) {
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 }
 
@@ -1392,6 +1630,7 @@ export async function createProduct(req: Request, res: Response) {
     }
 
     const doc = await ProductModel.create(payload);
+
     const populated = await applyProductPopulate(ProductModel.findById(doc._id));
 
     return res.status(201).json({
@@ -1400,11 +1639,18 @@ export async function createProduct(req: Request, res: Response) {
       data: populated ?? doc,
     });
   } catch (e: any) {
+    if (isParallelArrayIndexError(e)) {
+      return buildParallelArrayIndexErrorResponse(res);
+    }
+
     if (e?.code === 11000) {
       return buildMongoDuplicateErrorResponse(res, e);
     }
 
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 }
 
@@ -1414,17 +1660,19 @@ export async function updateProduct(req: Request, res: Response) {
     const id = getSingleParam(req.params.id);
 
     if (!isObjectId(id)) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid product id" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid product id",
+      });
     }
 
     const existing = await ProductModel.findById(id);
 
     if (!existing) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Product not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
     }
 
     const payload = buildUpdatePayload(req.body, (req as any).user, existing);
@@ -1439,7 +1687,7 @@ export async function updateProduct(req: Request, res: Response) {
       );
     }
 
-    if (!validateUpdatePayload(payload, res)) {
+    if (!validateUpdatePayload(payload, res, existing)) {
       return;
     }
 
@@ -1449,9 +1697,7 @@ export async function updateProduct(req: Request, res: Response) {
           ? payload.itemModelNumber
           : existing.itemModelNumber,
       itemKey:
-        typeof payload.itemKey === "string"
-          ? payload.itemKey
-          : existing.itemKey,
+        typeof payload.itemKey === "string" ? payload.itemKey : existing.itemKey,
       excludeId: id,
     });
 
@@ -1520,11 +1766,18 @@ export async function updateProduct(req: Request, res: Response) {
       });
     }
 
+    if (isParallelArrayIndexError(e)) {
+      return buildParallelArrayIndexErrorResponse(res);
+    }
+
     if (e?.code === 11000) {
       return buildMongoDuplicateErrorResponse(res, e);
     }
 
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 }
 
@@ -1534,17 +1787,19 @@ export async function deleteProduct(req: Request, res: Response) {
     const id = getSingleParam(req.params.id);
 
     if (!isObjectId(id)) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid product id" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid product id",
+      });
     }
 
     const doc = await ProductModel.findByIdAndDelete(id);
 
     if (!doc) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Product not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
     }
 
     return res.json({
@@ -1552,6 +1807,9 @@ export async function deleteProduct(req: Request, res: Response) {
       message: "Product deleted successfully",
     });
   } catch (e: any) {
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 }

@@ -14,8 +14,7 @@ import modelRoutes from "./model.routes";
 import ProductCompatibilityRoutes from "./productCompatibility.routes";
 import proudctRoutes from "./product.routes";
 import shopCatalogMapRoutes from "./shopCatalogMap.routes";
-import vendorGlobalRoutes from "./vendorGlobal.routes";
-import shopVendorMapRoutes from "./shopVendorMap.routes";
+import vendorGlobalRoutes from "./vendor.routes";
 import productGlobalRoutes from "./product.routes";
 import shopProductRoutes from "./shopProduct.routes";
 import customerRoutes from "./customer.public.routes";
@@ -47,7 +46,6 @@ router.use("/productcompatibility", ProductCompatibilityRoutes);
 router.use("/product", proudctRoutes);
 router.use("/shop-catalog-map", shopCatalogMapRoutes);
 router.use("/vendors", vendorGlobalRoutes);
-router.use("/shop-vendor-map", shopVendorMapRoutes);
 router.use("/products", productGlobalRoutes);
 router.use("/shop-products", shopProductRoutes);
 

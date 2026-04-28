@@ -262,19 +262,22 @@ const ProductSchema = new Schema(
       index: true,
     },
 
-    brandId: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: "Brand",
-      },
-    ],
+    // Product brand. Example: CEDO Back Cover
+    brandId: {
+      type: Schema.Types.ObjectId,
+      ref: "Brand",
+      required: true,
+      index: true,
+    },
 
-    modelId: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: "Model",
-      },
-    ],
+    // Primary product model. Example: Vivo V60 5G.
+    // For compatibility products, this can be null.
+    modelId: {
+      type: Schema.Types.ObjectId,
+      ref: "Model",
+      default: null,
+      index: true,
+    },
 
     images: {
       type: [ImageSchema],
@@ -410,8 +413,8 @@ type MutableProductDocument = Omit<
 > & {
   configurationMode?: string;
   searchKeys?: string[];
-  brandId?: unknown[];
-  modelId?: unknown[];
+  brandId?: unknown;
+  modelId?: unknown;
   images?: MediaInput[];
   videos?: MediaInput[];
   compatible?: CompatibilityGroupInput[];
@@ -431,11 +434,26 @@ ProductSchema.index({ createdBy: 1, createdByRole: 1 });
 ProductSchema.index({ isActive: 1, createdAt: -1 });
 ProductSchema.index({ isActiveGlobal: 1, createdAt: -1 });
 
+type CollectionIndex = {
+  key?: Record<string, unknown>;
+  name?: string;
+};
+
+function isLegacyProductIndex(index: CollectionIndex) {
+  const name = String(index.name || "");
+  const keys = Object.keys(index.key || {});
+
+  return (
+    name === "productTypeId_1" ||
+    name === "productTypeId_1_brandId_1_modelId_1" ||
+    name === "brandId_1_modelId_1" ||
+    (keys.includes("brandId") && keys.includes("modelId"))
+  );
+}
+
 /* ---------------- PRE VALIDATE ---------------- */
 ProductSchema.pre("validate", function () {
-  const doc = this as MutableProductDocument & {
-    configurationMode?: string;
-  };
+  const doc = this as MutableProductDocument;
 
   if (doc.itemName) {
     doc.itemName = doc.itemName.trim();
@@ -449,13 +467,8 @@ ProductSchema.pre("validate", function () {
     doc.description = doc.description.trim();
   }
 
-  doc.brandId = Array.isArray(doc.brandId)
-    ? doc.brandId.filter(Boolean)
-    : undefined;
-
-  doc.modelId = Array.isArray(doc.modelId)
-    ? doc.modelId.filter(Boolean)
-    : undefined;
+  doc.brandId = doc.brandId || undefined;
+  doc.modelId = doc.modelId || null;
 
   doc.itemKey = normalizeText(
     doc.itemKey || `${doc.itemName || ""} ${doc.itemModelNumber || ""}`
@@ -482,120 +495,123 @@ ProductSchema.pre("save", function () {
 
   const compatible = Array.isArray(doc.compatible)
     ? doc.compatible
-      .map((item) => ({
-        brandId: item?.brandId,
-        modelId: Array.isArray(item?.modelId)
-          ? item.modelId.filter(Boolean)
-          : [],
-        notes: String(item?.notes || "").trim(),
-        isActive: item?.isActive !== false,
-      }))
-      .filter((item) => Boolean(item.brandId))
+        .map((item) => ({
+          brandId: item?.brandId,
+          modelId: Array.isArray(item?.modelId)
+            ? item.modelId.filter(Boolean)
+            : [],
+          notes: String(item?.notes || "").trim(),
+          isActive: item?.isActive !== false,
+        }))
+        .filter((item) => Boolean(item.brandId))
     : undefined;
   doc.compatible = compatible?.length ? compatible : undefined;
 
   const productInformation = Array.isArray(doc.productInformation)
     ? doc.productInformation
-      .map((section) => ({
-        title: String(section?.title || "").trim(),
-        fields: Array.isArray(section?.fields)
-          ? section.fields
-              .map((field) => ({
-                label: String(field?.label || "").trim(),
-                value: field?.value ?? "",
-              }))
-              .filter(
-                (field) =>
-                  field.label ||
-                  (typeof field.value === "string"
-                    ? field.value.trim()
-                    : field.value !== null && field.value !== undefined)
-              )
-          : [],
-      }))
-      .filter((section) => section.title || section.fields.length)
+        .map((section) => ({
+          title: String(section?.title || "").trim(),
+          fields: Array.isArray(section?.fields)
+            ? section.fields
+                .map((field) => ({
+                  label: String(field?.label || "").trim(),
+                  value: field?.value ?? "",
+                }))
+                .filter(
+                  (field) =>
+                    field.label ||
+                    (typeof field.value === "string"
+                      ? field.value.trim()
+                      : field.value !== null && field.value !== undefined)
+                )
+            : [],
+        }))
+        .filter((section) => section.title || section.fields.length)
     : undefined;
   doc.productInformation =
     productInformation?.length ? productInformation : undefined;
 
   const variant = Array.isArray(doc.variant)
     ? doc.variant
-      .map((variantItem) => {
-        const attributes = Array.isArray(variantItem?.attributes)
-          ? variantItem.attributes
-              .map((attribute) => ({
-                label: String(attribute?.label || "").trim(),
-                value: String(attribute?.value || "").trim(),
-              }))
-              .filter((attribute) => attribute.label && attribute.value)
-          : [];
+        .map((variantItem) => {
+          const attributes = Array.isArray(variantItem?.attributes)
+            ? variantItem.attributes
+                .map((attribute) => ({
+                  label: String(attribute?.label || "").trim(),
+                  value: String(attribute?.value || "").trim(),
+                }))
+                .filter((attribute) => attribute.label && attribute.value)
+            : [];
 
-        const images = Array.isArray(variantItem?.images)
-          ? variantItem.images.filter((item) => Boolean(item?.url))
-          : [];
+          const images = Array.isArray(variantItem?.images)
+            ? variantItem.images.filter((item) => Boolean(item?.url))
+            : [];
 
-        const videos = Array.isArray(variantItem?.videos)
-          ? variantItem.videos.filter((item) => Boolean(item?.url))
-          : [];
+          const videos = Array.isArray(variantItem?.videos)
+            ? variantItem.videos.filter((item) => Boolean(item?.url))
+            : [];
 
-        const compatible = Array.isArray(variantItem?.compatible)
-          ? variantItem.compatible
-              .map((item) => ({
-                brandId: item?.brandId,
-                modelId: Array.isArray(item?.modelId)
-                  ? item.modelId.filter(Boolean)
-                  : [],
-                notes: String(item?.notes || "").trim(),
-                isActive: item?.isActive !== false,
-              }))
-              .filter((item) => Boolean(item.brandId))
-          : [];
+          const compatible = Array.isArray(variantItem?.compatible)
+            ? variantItem.compatible
+                .map((item) => ({
+                  brandId: item?.brandId,
+                  modelId: Array.isArray(item?.modelId)
+                    ? item.modelId.filter(Boolean)
+                    : [],
+                  notes: String(item?.notes || "").trim(),
+                  isActive: item?.isActive !== false,
+                }))
+                .filter((item) => Boolean(item.brandId))
+            : [];
 
-        const productInformation = Array.isArray(variantItem?.productInformation)
-          ? variantItem.productInformation
-              .map((section) => ({
-                title: String(section?.title || "").trim(),
-                fields: Array.isArray(section?.fields)
-                  ? section.fields
-                      .map((field) => ({
-                        label: String(field?.label || "").trim(),
-                        value: field?.value ?? "",
-                      }))
-                      .filter(
-                        (field) =>
-                          field.label ||
-                          (typeof field.value === "string"
-                            ? field.value.trim()
-                            : field.value !== null && field.value !== undefined)
-                      )
-                  : [],
-              }))
-              .filter((section) => section.title || section.fields.length)
-          : [];
+          const productInformation = Array.isArray(
+            variantItem?.productInformation
+          )
+            ? variantItem.productInformation
+                .map((section) => ({
+                  title: String(section?.title || "").trim(),
+                  fields: Array.isArray(section?.fields)
+                    ? section.fields
+                        .map((field) => ({
+                          label: String(field?.label || "").trim(),
+                          value: field?.value ?? "",
+                        }))
+                        .filter(
+                          (field) =>
+                            field.label ||
+                            (typeof field.value === "string"
+                              ? field.value.trim()
+                              : field.value !== null &&
+                                field.value !== undefined)
+                        )
+                    : [],
+                }))
+                .filter((section) => section.title || section.fields.length)
+            : [];
 
-        return {
-          title: String(variantItem?.title || "").trim(),
-          description: String(variantItem?.description || "").trim(),
-          attributes: attributes.length ? attributes : undefined,
-          images: images.length ? images : undefined,
-          videos: videos.length ? videos : undefined,
-          compatible: compatible.length ? compatible : undefined,
-          productInformation: productInformation.length
-            ? productInformation
-            : undefined,
-          isActive: variantItem?.isActive !== false,
-        };
-      })
-      .filter(
-        (variantItem) =>
-          Boolean(variantItem.title) ||
-          Boolean(variantItem.description) ||
-          Boolean(variantItem.attributes?.length) ||
-          Boolean(variantItem.images?.length) ||
-          Boolean(variantItem.videos?.length) ||
-          Boolean(variantItem.compatible?.length) ||
-          Boolean(variantItem.productInformation?.length)
-      )
+          return {
+            title: String(variantItem?.title || "").trim(),
+            description: String(variantItem?.description || "").trim(),
+            attributes: attributes.length ? attributes : undefined,
+            images: images.length ? images : undefined,
+            videos: videos.length ? videos : undefined,
+            compatible: compatible.length ? compatible : undefined,
+            productInformation: productInformation.length
+              ? productInformation
+              : undefined,
+            isActive: variantItem?.isActive !== false,
+          };
+        })
+        .filter(
+          (variantItem) =>
+            Boolean(variantItem.title) ||
+            Boolean(variantItem.description) ||
+            Boolean(variantItem.attributes?.length) ||
+            Boolean(variantItem.images?.length) ||
+            Boolean(variantItem.videos?.length) ||
+            Boolean(variantItem.compatible?.length) ||
+            Boolean(variantItem.productInformation?.length)
+        )
     : undefined;
   doc.variant = variant?.length ? variant : undefined;
 
@@ -638,7 +654,9 @@ ProductSchema.pre("save", function () {
             ])
           : [];
 
-        const variantCompatibilityValues = Array.isArray(variantItem?.compatible)
+        const variantCompatibilityValues = Array.isArray(
+          variantItem?.compatible
+        )
           ? variantItem.compatible.flatMap((item) => [item?.notes || ""])
           : [];
 
@@ -714,3 +732,22 @@ ProductSchema.pre("save", function () {
 /* ---------------- MODEL ---------------- */
 export const ProductModel =
   models.Product || model("Product", ProductSchema);
+
+export async function cleanupLegacyProductIndexes() {
+  try {
+    const indexes = await ProductModel.collection.indexes();
+    const staleIndexes = indexes.filter(isLegacyProductIndex);
+
+    for (const index of staleIndexes) {
+      if (!index.name || index.name === "_id_") continue;
+
+      await ProductModel.collection.dropIndex(index.name);
+    }
+  } catch (error: any) {
+    if (error?.codeName === "NamespaceNotFound") {
+      return;
+    }
+
+    throw error;
+  }
+}
