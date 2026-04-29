@@ -13,7 +13,10 @@ import brandRoutes from "./brand.routes";
 import modelRoutes from "./model.routes";
 import ProductCompatibilityRoutes from "./productCompatibility.routes";
 import proudctRoutes from "./product.routes";
-import shopCatalogMapRoutes from "./shopCatalogMap.routes";
+import shopCategoryMapRoutes from "./shopCategoryMap.routes";
+import shopSubCategoryMapRoutes from "./shopSubCategoryMap.routes";
+import shopBrandMapRoutes from "./shopBrandMap.routes";
+import shopModelMapRoutes from "./shopModelMap.routes";
 import vendorGlobalRoutes from "./vendor.routes";
 import productGlobalRoutes from "./product.routes";
 import shopProductRoutes from "./shopProduct.routes";
@@ -21,6 +24,7 @@ import customerRoutes from "./customer.public.routes";
 import customerShopRoutes from "./customer.shop.routes";
 import orderRoutes from "./order.routes";
 import locationRoutes from "./location.routes";
+import purchaseRoutes from "./purchase.routes";
 
 const router = Router();
 
@@ -44,11 +48,14 @@ router.use("/brands", brandRoutes);
 router.use("/models", modelRoutes);
 router.use("/productcompatibility", ProductCompatibilityRoutes);
 router.use("/product", proudctRoutes);
-router.use("/shop-catalog-map", shopCatalogMapRoutes);
+router.use("/shop-category-maps", shopCategoryMapRoutes);
+router.use("/shop-sub-category-maps", shopSubCategoryMapRoutes);
+router.use("/shop-brand-maps", shopBrandMapRoutes);
+router.use("/shop-model-maps", shopModelMapRoutes);
 router.use("/vendors", vendorGlobalRoutes);
 router.use("/products", productGlobalRoutes);
 router.use("/shop-products", shopProductRoutes);
-
+router.use("/purchase", purchaseRoutes);
 /* ---------------- CUSTOMER ---------------- */
 router.use("/customer", customerRoutes);
 router.use("/customer/shops", customerShopRoutes);

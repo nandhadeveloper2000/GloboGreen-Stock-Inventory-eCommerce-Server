@@ -31,30 +31,49 @@ const VariantAttributeSchema = new Schema(
 
 const DiscountSchema = new Schema(
   {
-    rangeDownPercent: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: 90,
-    },
-    fromDate: {
-      type: Date,
-      default: null,
-    },
-    toDate: {
-      type: Date,
-      default: null,
-    },
-    ruleId: {
-      type: Schema.Types.ObjectId,
-      ref: "DiscountRule",
-      default: null,
-    },
+    rangeDownPercent: { type: Number, default: 0, min: 0, max: 90 },
+    fromDate: { type: Date, default: null },
+    toDate: { type: Date, default: null },
+    ruleId: { type: Schema.Types.ObjectId, ref: "DiscountRule", default: null },
   },
   { _id: false }
 );
 
-const PricingFieldSchema = {
+const PricingSchema = new Schema(
+  {
+    pricingType: {
+      type: String,
+      enum: SHOP_PRODUCT_PRICING_TYPES,
+      default: "SINGLE",
+      trim: true,
+      uppercase: true,
+    },
+
+    minQty: { type: Number, default: 0, min: 0 },
+    purchaseQty: { type: Number, default: 0, min: 0 },
+
+    inputPrice: { type: Number, default: 0, min: 0 },
+    mrpPrice: { type: Number, default: 0, min: 0 },
+
+    baseRangeDownPercent: { type: Number, default: 10, min: 0, max: 90 },
+    rangeDownPercent: { type: Number, default: 0, min: 0, max: 90 },
+
+    marginAmount: { type: Number, default: 0, min: 0 },
+    marginPrice: { type: Number, default: 0, min: 0 },
+    unitSellingPrice: { type: Number, default: 0, min: 0 },
+    totalPurchasePrice: { type: Number, default: 0, min: 0 },
+
+    negotiationAmount: { type: Number, default: 0, min: 0 },
+    minSellingPrice: { type: Number, default: 0, min: 0 },
+    maxSellingPrice: { type: Number, default: 0, min: 0 },
+    sellingPrice: { type: Number, default: 0, min: 0 },
+
+    discount: { type: DiscountSchema, default: () => ({}) },
+  },
+  { _id: false }
+);
+
+const LegacyPricingFields = {
   pricingType: {
     type: String,
     enum: SHOP_PRODUCT_PRICING_TYPES,
@@ -62,99 +81,27 @@ const PricingFieldSchema = {
     trim: true,
     uppercase: true,
   },
-
-  purchaseQty: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
-
-  inputPrice: {
-    type: Number,
-    required: true,
-    min: 0,
-    default: 0,
-  },
-
-  mrpPrice: {
-    type: Number,
-    required: true,
-    min: 0,
-    default: 0,
-  },
-
-  baseRangeDownPercent: {
-    type: Number,
-    default: 10,
-    min: 0,
-    max: 90,
-  },
-
-  rangeDownPercent: {
-    type: Number,
-    default: 0,
-    min: 0,
-    max: 90,
-  },
-
-  marginAmount: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
-
-  marginPrice: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
-
-  negotiationAmount: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
-
-  minSellingPrice: {
-    type: Number,
-    required: true,
-    min: 0,
-    default: 0,
-  },
-
-  maxSellingPrice: {
-    type: Number,
-    required: true,
-    min: 0,
-    default: 0,
-  },
-
-  sellingPrice: {
-    type: Number,
-    required: true,
-    min: 0,
-    default: 0,
-  },
+  minQty: { type: Number, default: 0, min: 0 },
+  purchaseQty: { type: Number, default: 0, min: 0 },
+  inputPrice: { type: Number, default: 0, min: 0 },
+  mrpPrice: { type: Number, default: 0, min: 0 },
+  baseRangeDownPercent: { type: Number, default: 10, min: 0, max: 90 },
+  rangeDownPercent: { type: Number, default: 0, min: 0, max: 90 },
+  marginAmount: { type: Number, default: 0, min: 0 },
+  marginPrice: { type: Number, default: 0, min: 0 },
+  unitSellingPrice: { type: Number, default: 0, min: 0 },
+  totalPurchasePrice: { type: Number, default: 0, min: 0 },
+  negotiationAmount: { type: Number, default: 0, min: 0 },
+  minSellingPrice: { type: Number, default: 0, min: 0 },
+  maxSellingPrice: { type: Number, default: 0, min: 0 },
+  sellingPrice: { type: Number, default: 0, min: 0 },
 };
 
 const VariantEntrySchema = new Schema(
   {
-    variantIndex: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-
-    title: {
-      type: String,
-      default: "",
-      trim: true,
-    },
-
-    attributes: {
-      type: [VariantAttributeSchema],
-      default: [],
-    },
+    variantIndex: { type: Number, required: true, min: 0 },
+    title: { type: String, default: "", trim: true },
+    attributes: { type: [VariantAttributeSchema], default: [] },
 
     mainUnit: {
       type: String,
@@ -163,51 +110,19 @@ const VariantEntrySchema = new Schema(
       trim: true,
     },
 
-    qty: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+    qty: { type: Number, default: 0, min: 0 },
+    lowStockQty: { type: Number, default: 0, min: 0 },
+    purchaseDate: { type: Date, default: null },
+    expiryDate: { type: Date, default: null },
+    warrantyMonths: { type: Number, default: 0, min: 0 },
 
-    lowStockQty: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+    ...LegacyPricingFields,
+    discount: { type: DiscountSchema, default: () => ({}) },
 
-    minQty: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+    singlePricing: { type: PricingSchema, default: null },
+    bulkPricing: { type: PricingSchema, default: null },
 
-    purchaseDate: {
-      type: Date,
-      default: null,
-    },
-
-    expiryDate: {
-      type: Date,
-      default: null,
-    },
-
-    warrantyMonths: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
-    ...PricingFieldSchema,
-
-    discount: {
-      type: DiscountSchema,
-      default: () => ({}),
-    },
-
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
+    isActive: { type: Boolean, default: true },
   },
   { _id: false }
 );
@@ -228,6 +143,56 @@ const ShopProductSchema = new Schema(
       index: true,
     },
 
+    sku: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+      index: true,
+    },
+
+    itemName: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    masterCategoryId: {
+      type: Schema.Types.ObjectId,
+      ref: "MasterCategory",
+      default: null,
+      index: true,
+    },
+
+    categoryId: {
+      type: Schema.Types.ObjectId,
+      ref: "Category",
+      default: null,
+      index: true,
+    },
+
+    subcategoryId: {
+      type: Schema.Types.ObjectId,
+      ref: "SubCategory",
+      default: null,
+      index: true,
+    },
+
+    brandId: {
+      type: Schema.Types.ObjectId,
+      ref: "Brand",
+      default: null,
+      index: true,
+    },
+
+    modelId: {
+      type: Schema.Types.ObjectId,
+      ref: "Model",
+      default: null,
+      index: true,
+    },
+
     mainUnit: {
       type: String,
       enum: PRODUCT_UNITS,
@@ -235,23 +200,8 @@ const ShopProductSchema = new Schema(
       trim: true,
     },
 
-    qty: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
-    lowStockQty: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
-    minQty: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+    qty: { type: Number, default: 0, min: 0 },
+    lowStockQty: { type: Number, default: 0, min: 0 },
 
     vendorId: {
       type: Schema.Types.ObjectId,
@@ -260,67 +210,25 @@ const ShopProductSchema = new Schema(
       index: true,
     },
 
-    purchaseDate: {
-      type: Date,
-      default: null,
-    },
+    purchaseDate: { type: Date, default: null },
+    expiryDate: { type: Date, default: null },
+    warrantyMonths: { type: Number, default: 0, min: 0 },
 
-    expiryDate: {
-      type: Date,
-      default: null,
-    },
+    ...LegacyPricingFields,
+    discount: { type: DiscountSchema, default: () => ({}) },
 
-    warrantyMonths: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+    singlePricing: { type: PricingSchema, default: null },
+    bulkPricing: { type: PricingSchema, default: null },
 
-    ...PricingFieldSchema,
+    images: { type: [ImageSchema], default: [] },
+    variantEntries: { type: [VariantEntrySchema], default: [] },
 
-    discount: {
-      type: DiscountSchema,
-      default: () => ({}),
-    },
+    isActive: { type: Boolean, default: true, index: true },
 
-    images: {
-      type: [ImageSchema],
-      default: [],
-    },
-
-    variantEntries: {
-      type: [VariantEntrySchema],
-      default: [],
-    },
-
-    isActive: {
-      type: Boolean,
-      default: true,
-      index: true,
-    },
-
-    createdBy: {
-      type: Schema.Types.ObjectId,
-      required: true,
-      index: true,
-    },
-
-    createdByRole: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-
-    updatedBy: {
-      type: Schema.Types.ObjectId,
-      default: null,
-    },
-
-    updatedByRole: {
-      type: String,
-      trim: true,
-      default: "",
-    },
+    createdBy: { type: Schema.Types.ObjectId, required: true, index: true },
+    createdByRole: { type: String, required: true, trim: true },
+    updatedBy: { type: Schema.Types.ObjectId, default: null },
+    updatedByRole: { type: String, trim: true, default: "" },
   },
   { timestamps: true }
 );
@@ -329,6 +237,12 @@ ShopProductSchema.index({ shopId: 1, productId: 1 }, { unique: true });
 ShopProductSchema.index({ shopId: 1, isActive: 1, createdAt: -1 });
 ShopProductSchema.index({ productId: 1, isActive: 1 });
 ShopProductSchema.index({ vendorId: 1, isActive: 1 });
+
+ShopProductSchema.index({ shopId: 1, sku: 1 });
+ShopProductSchema.index({ shopId: 1, categoryId: 1, isActive: 1 });
+ShopProductSchema.index({ shopId: 1, subcategoryId: 1, isActive: 1 });
+ShopProductSchema.index({ shopId: 1, brandId: 1, isActive: 1 });
+ShopProductSchema.index({ shopId: 1, modelId: 1, isActive: 1 });
 
 function toSafeNumber(value: unknown, fallback = 0) {
   const num = Number(value);
@@ -358,38 +272,44 @@ function normalizePricingType(value: unknown): ShopProductPricingType {
     : "SINGLE";
 }
 
-function normalizeDiscountValue(target: any, fallbackPercent = 0) {
+function normalizeDateValue(value: unknown) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function normalizeDiscount(target: any, fallbackPercent = 0) {
+  const discount = target?.discount || {};
+
   target.discount = {
     rangeDownPercent: clampPercent(
-      target?.discount?.rangeDownPercent,
+      discount.rangeDownPercent ?? target?.rangeDownPercent,
       fallbackPercent
     ),
-    fromDate: target?.discount?.fromDate || null,
-    toDate: target?.discount?.toDate || null,
-    ruleId: target?.discount?.ruleId || null,
+    fromDate: normalizeDateValue(discount.fromDate),
+    toDate: normalizeDateValue(discount.toDate),
+    ruleId: discount.ruleId || null,
   };
 }
 
-function normalizePricingTarget(target: any) {
-  target.mainUnit = normalizeMainUnit(target.mainUnit);
-  target.pricingType = normalizePricingType(target.pricingType);
+function normalizePricingTarget(
+  value: any,
+  forcedType?: ShopProductPricingType
+) {
+  const target = value || {};
 
-  target.qty = toSafeNumber(target.qty);
-  target.lowStockQty = toSafeNumber(target.lowStockQty);
-  target.minQty = toSafeNumber(target.minQty);
-  target.purchaseQty = toSafeNumber(target.purchaseQty ?? target.minQty);
-  target.warrantyMonths = toSafeNumber(target.warrantyMonths);
+  target.pricingType = forcedType || normalizePricingType(target.pricingType);
+  target.minQty = toSafeNumber(target.minQty, 0);
+  target.purchaseQty = toSafeNumber(target.purchaseQty ?? target.minQty, 0);
 
   target.inputPrice = toSafeNumber(target.inputPrice, 0);
   target.mrpPrice = toSafeNumber(target.mrpPrice, 0);
-
-  target.baseRangeDownPercent = clampPercent(target.baseRangeDownPercent, 0);
+  target.baseRangeDownPercent = clampPercent(target.baseRangeDownPercent, 10);
   target.rangeDownPercent = clampPercent(target.rangeDownPercent, 0);
 
-  normalizeDiscountValue(target, target.rangeDownPercent);
+  normalizeDiscount(target, target.rangeDownPercent);
 
   const inputPrice = target.inputPrice;
-  const mrpPrice = target.mrpPrice;
   const marginPercent = target.baseRangeDownPercent;
   const negotiationPercent = clampPercent(
     target.discount?.rangeDownPercent,
@@ -397,59 +317,65 @@ function normalizePricingTarget(target: any) {
   );
 
   const marginAmount = (inputPrice * marginPercent) / 100;
-  const marginPrice = inputPrice + marginAmount;
+  const unitSellingPrice = inputPrice + marginAmount;
+
+  const totalPurchasePrice =
+    target.pricingType === "BULK" ? target.purchaseQty * inputPrice : inputPrice;
 
   const sellingPrice =
     target.pricingType === "BULK"
-      ? target.purchaseQty * marginPrice
-      : marginPrice;
+      ? target.purchaseQty * unitSellingPrice
+      : unitSellingPrice;
 
   const negotiationAmount = (sellingPrice * negotiationPercent) / 100;
   const minSellingPrice = Math.max(sellingPrice - negotiationAmount, 0);
 
   target.marginAmount = roundMoney(marginAmount);
-  target.marginPrice = roundMoney(marginPrice);
+  target.marginPrice = roundMoney(unitSellingPrice);
+  target.unitSellingPrice = roundMoney(unitSellingPrice);
+  target.totalPurchasePrice = roundMoney(totalPurchasePrice);
   target.negotiationAmount = roundMoney(negotiationAmount);
   target.maxSellingPrice = roundMoney(sellingPrice);
   target.minSellingPrice = roundMoney(minSellingPrice);
   target.sellingPrice = roundMoney(sellingPrice);
 
-  if (inputPrice <= 0) {
-    target.invalidate("inputPrice", "Input price is required");
-  }
+  return target;
+}
 
-  if (mrpPrice <= 0) {
-    target.invalidate("mrpPrice", "MRP price is required");
-  }
-
-  if (inputPrice >= mrpPrice) {
-    target.invalidate("inputPrice", "Input price must be less than MRP price");
-  }
-
-  if (target.pricingType === "SINGLE" && sellingPrice > mrpPrice) {
-    target.invalidate(
-      "sellingPrice",
-      "Single product selling price must be less than or equal to MRP price"
-    );
-  }
-
-  if (target.pricingType === "BULK" && marginPrice > mrpPrice) {
-    target.invalidate(
-      "marginPrice",
-      "Bulk unit margin price must be less than or equal to MRP price"
-    );
-  }
+function copyPricingToLegacyFields(target: any, pricing: any) {
+  target.pricingType = pricing.pricingType;
+  target.minQty = pricing.minQty;
+  target.purchaseQty = pricing.purchaseQty;
+  target.inputPrice = pricing.inputPrice;
+  target.mrpPrice = pricing.mrpPrice;
+  target.baseRangeDownPercent = pricing.baseRangeDownPercent;
+  target.rangeDownPercent = pricing.rangeDownPercent;
+  target.marginAmount = pricing.marginAmount;
+  target.marginPrice = pricing.marginPrice;
+  target.unitSellingPrice = pricing.unitSellingPrice;
+  target.totalPurchasePrice = pricing.totalPurchasePrice;
+  target.negotiationAmount = pricing.negotiationAmount;
+  target.minSellingPrice = pricing.minSellingPrice;
+  target.maxSellingPrice = pricing.maxSellingPrice;
+  target.sellingPrice = pricing.sellingPrice;
+  target.discount = pricing.discount;
 }
 
 function normalizeVariantEntry(entry: any, fallbackIndex: number) {
   const next = entry || {};
 
-  next.variantIndex = Number.isInteger(next.variantIndex)
-    ? next.variantIndex
+  next.variantIndex = Number.isInteger(Number(next.variantIndex))
+    ? Number(next.variantIndex)
     : fallbackIndex;
 
   next.title = String(next.title || "").trim();
   next.mainUnit = normalizeMainUnit(next.mainUnit);
+  next.qty = toSafeNumber(next.qty, 0);
+  next.lowStockQty = toSafeNumber(next.lowStockQty, 0);
+  next.warrantyMonths = toSafeNumber(next.warrantyMonths, 0);
+  next.purchaseDate = normalizeDateValue(next.purchaseDate);
+  next.expiryDate = normalizeDateValue(next.expiryDate);
+  next.isActive = next.isActive !== false;
 
   next.attributes = Array.isArray(next.attributes)
     ? next.attributes
@@ -460,11 +386,30 @@ function normalizeVariantEntry(entry: any, fallbackIndex: number) {
         .filter((attribute: any) => attribute.label || attribute.value)
     : [];
 
-  next.isActive = next.isActive !== false;
+  const singleSource = next.singlePricing || next;
+  next.singlePricing = normalizePricingTarget(singleSource, "SINGLE");
 
-  normalizePricingTarget(next);
+  if (next.bulkPricing) {
+    next.bulkPricing = normalizePricingTarget(next.bulkPricing, "BULK");
+  } else {
+    next.bulkPricing = null;
+  }
+
+  copyPricingToLegacyFields(next, next.singlePricing);
 
   return next;
+}
+
+function hasConfiguredPricing(pricing: any) {
+  return Boolean(
+    pricing &&
+      (toSafeNumber(pricing?.purchaseQty, 0) > 0 ||
+        toSafeNumber(pricing?.inputPrice, 0) > 0 ||
+        toSafeNumber(pricing?.mrpPrice, 0) > 0 ||
+        toSafeNumber(pricing?.minQty, 0) > 0 ||
+        pricing?.discount?.fromDate ||
+        pricing?.discount?.toDate)
+  );
 }
 
 function hasConfiguredVariantEntry(entry: any) {
@@ -472,20 +417,37 @@ function hasConfiguredVariantEntry(entry: any) {
     entry?.isActive !== false &&
       (toSafeNumber(entry?.qty, 0) > 0 ||
         toSafeNumber(entry?.lowStockQty, 0) > 0 ||
-        toSafeNumber(entry?.minQty, 0) > 0 ||
-        toSafeNumber(entry?.purchaseQty, 0) > 0 ||
-        toSafeNumber(entry?.inputPrice, 0) > 0 ||
-        toSafeNumber(entry?.mrpPrice, 0) > 0 ||
         toSafeNumber(entry?.warrantyMonths, 0) > 0 ||
         entry?.purchaseDate ||
         entry?.expiryDate ||
-        entry?.discount?.fromDate ||
-        entry?.discount?.toDate)
+        hasConfiguredPricing(entry?.singlePricing) ||
+        hasConfiguredPricing(entry?.bulkPricing))
   );
 }
 
 ShopProductSchema.pre("validate", function () {
   const doc = this as any;
+
+  if (doc.sku) {
+    doc.sku = String(doc.sku).trim().toUpperCase();
+  }
+
+  if (doc.itemName) {
+    doc.itemName = String(doc.itemName).trim();
+  }
+
+  doc.masterCategoryId = doc.masterCategoryId || null;
+  doc.categoryId = doc.categoryId || null;
+  doc.subcategoryId = doc.subcategoryId || null;
+  doc.brandId = doc.brandId || null;
+  doc.modelId = doc.modelId || null;
+
+  doc.mainUnit = normalizeMainUnit(doc.mainUnit);
+  doc.qty = toSafeNumber(doc.qty, 0);
+  doc.lowStockQty = toSafeNumber(doc.lowStockQty, 0);
+  doc.warrantyMonths = toSafeNumber(doc.warrantyMonths, 0);
+  doc.purchaseDate = normalizeDateValue(doc.purchaseDate);
+  doc.expiryDate = normalizeDateValue(doc.expiryDate);
 
   doc.variantEntries = Array.isArray(doc.variantEntries)
     ? doc.variantEntries
@@ -497,8 +459,6 @@ ShopProductSchema.pre("validate", function () {
     const primary = doc.variantEntries[0];
 
     doc.mainUnit = primary?.mainUnit || "Pcs";
-    doc.pricingType = primary?.pricingType || "SINGLE";
-
     doc.qty = doc.variantEntries.reduce(
       (sum: number, entry: any) => sum + toSafeNumber(entry.qty),
       0
@@ -509,42 +469,36 @@ ShopProductSchema.pre("validate", function () {
       0
     );
 
-    doc.minQty = doc.variantEntries.reduce(
-      (sum: number, entry: any) => sum + toSafeNumber(entry.minQty),
-      0
-    );
-
-    doc.purchaseQty = doc.variantEntries.reduce(
-      (sum: number, entry: any) => sum + toSafeNumber(entry.purchaseQty),
-      0
-    );
-
     doc.warrantyMonths = primary?.warrantyMonths || 0;
     doc.purchaseDate = primary?.purchaseDate || null;
     doc.expiryDate = primary?.expiryDate || null;
 
-    doc.inputPrice = primary?.inputPrice || 0;
-    doc.mrpPrice = primary?.mrpPrice || 0;
-    doc.baseRangeDownPercent = primary?.baseRangeDownPercent || 0;
-    doc.rangeDownPercent = primary?.rangeDownPercent || 0;
-    doc.marginAmount = primary?.marginAmount || 0;
-    doc.marginPrice = primary?.marginPrice || 0;
-    doc.negotiationAmount = primary?.negotiationAmount || 0;
-    doc.discount = primary?.discount || {
-      rangeDownPercent: 0,
-      fromDate: null,
-      toDate: null,
-      ruleId: null,
-    };
-    doc.minSellingPrice = primary?.minSellingPrice || 0;
-    doc.maxSellingPrice = primary?.maxSellingPrice || 0;
-    doc.sellingPrice = primary?.sellingPrice || 0;
+    doc.singlePricing = primary.singlePricing || null;
+    doc.bulkPricing = primary.bulkPricing || null;
+
+    if (doc.singlePricing) {
+      copyPricingToLegacyFields(doc, doc.singlePricing);
+    }
   } else {
-    normalizePricingTarget(doc);
+    const singleSource = doc.singlePricing || doc;
+    doc.singlePricing = normalizePricingTarget(singleSource, "SINGLE");
+
+    if (doc.bulkPricing) {
+      doc.bulkPricing = normalizePricingTarget(doc.bulkPricing, "BULK");
+    } else {
+      doc.bulkPricing = null;
+    }
+
+    copyPricingToLegacyFields(doc, doc.singlePricing);
   }
 
   if (Array.isArray(doc.images)) {
-    doc.images = doc.images.filter((item: any) => Boolean(item?.url));
+    doc.images = doc.images
+      .map((item: any) => ({
+        url: String(item?.url || "").trim(),
+        publicId: String(item?.publicId || item?.public_id || "").trim(),
+      }))
+      .filter((item: any) => Boolean(item.url));
   }
 });
 

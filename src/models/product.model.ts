@@ -207,19 +207,13 @@ const ProductSchema = new Schema(
       trim: true,
     },
 
-    itemModelNumber: {
+    sku: {
       type: String,
       required: true,
       trim: true,
+      uppercase: true,
       unique: true,
-    },
-
-    itemKey: {
-      type: String,
-      required: true,
-      trim: true,
-      lowercase: true,
-      unique: true,
+      index: true,
     },
 
     description: {
@@ -459,8 +453,8 @@ ProductSchema.pre("validate", function () {
     doc.itemName = doc.itemName.trim();
   }
 
-  if (doc.itemModelNumber) {
-    doc.itemModelNumber = doc.itemModelNumber.trim();
+  if (doc.sku) {
+    doc.sku = doc.sku.trim().toUpperCase();
   }
 
   if (typeof doc.description === "string") {
@@ -470,9 +464,6 @@ ProductSchema.pre("validate", function () {
   doc.brandId = doc.brandId || undefined;
   doc.modelId = doc.modelId || null;
 
-  doc.itemKey = normalizeText(
-    doc.itemKey || `${doc.itemName || ""} ${doc.itemModelNumber || ""}`
-  );
 
   doc.configurationMode = normalizeConfigurationMode(doc.configurationMode);
 });
@@ -696,8 +687,7 @@ ProductSchema.pre("save", function () {
   const searchKeys = uniqueCleanStrings([
     ...(Array.isArray(doc.searchKeys) ? doc.searchKeys : []),
     doc.itemName || "",
-    doc.itemModelNumber || "",
-    doc.itemKey || "",
+    doc.sku || "",
     doc.description || "",
     ...mainProductInfoValues,
     ...compatibilityValues,

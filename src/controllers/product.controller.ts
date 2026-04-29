@@ -252,8 +252,7 @@ function buildSearchFilter(q: string) {
   return {
     $or: [
       { itemName: { $regex: value, $options: "i" } },
-      { itemModelNumber: { $regex: value, $options: "i" } },
-      { itemKey: { $regex: value, $options: "i" } },
+      { sku: { $regex: value, $options: "i" } },
       { description: { $regex: value, $options: "i" } },
       { searchKeys: { $in: [value.toLowerCase()] } },
     ],
@@ -896,8 +895,7 @@ function buildCreatePayload(body: any, user: any) {
 
   return {
     itemName: norm(body?.itemName),
-    itemModelNumber: norm(body?.itemModelNumber),
-    itemKey: normalizeText(body?.itemKey),
+    sku: norm(body?.sku).toUpperCase(),
     description: norm(body?.description),
 
     searchKeys: normalizeArray<string>(searchKeys)
@@ -943,12 +941,8 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
     payload.itemName = norm(body.itemName);
   }
 
-  if (body?.itemModelNumber !== undefined) {
-    payload.itemModelNumber = norm(body.itemModelNumber);
-  }
-
-  if (body?.itemKey !== undefined) {
-    payload.itemKey = normalizeText(body.itemKey);
+  if (body?.sku !== undefined) {
+    payload.sku = norm(body.sku).toUpperCase();
   }
 
   if (body?.description !== undefined) {
@@ -1224,10 +1218,10 @@ function validateCreatePayload(
     payload.configurationMode
   );
 
-  if (!payload.itemName || !payload.itemModelNumber) {
+  if (!payload.itemName || !payload.sku) {
     res.status(400).json({
       success: false,
-      message: "itemName and itemModelNumber required",
+      message: "Product name and SKU are required",
     });
     return false;
   }
@@ -1410,45 +1404,31 @@ function validateUpdatePayload(
 /* ---------------- DUPLICATE + ERROR HELPERS ---------------- */
 
 async function findDuplicateProduct(params: {
-  itemModelNumber?: string;
-  itemKey?: string;
+  sku?: string;
   excludeId?: string;
 }) {
-  const orFilters: Record<string, unknown>[] = [];
+  const sku = norm(params.sku).toUpperCase();
 
-  if (params.itemModelNumber) {
-    orFilters.push({ itemModelNumber: params.itemModelNumber.trim() });
-  }
+  if (!sku) return null;
 
-  if (params.itemKey) {
-    orFilters.push({ itemKey: normalizeText(params.itemKey) });
-  }
-
-  if (!orFilters.length) return null;
-
-  const query: Record<string, unknown> = {
-    $or: orFilters,
-  };
+  const query: Record<string, unknown> = { sku };
 
   if (params.excludeId && isObjectId(params.excludeId)) {
     query._id = { $ne: new mongoose.Types.ObjectId(params.excludeId) };
   }
 
-  return ProductModel.findOne(query).select(
-    "_id itemName itemModelNumber itemKey"
-  );
+  return ProductModel.findOne(query).select("_id itemName sku");
 }
 
 function buildDuplicateResponse(res: Response, duplicate: any) {
   return res.status(409).json({
     success: false,
-    message: "Product already exists",
+    message: "Product SKU already exists",
     duplicate: duplicate
       ? {
           _id: duplicate._id,
           itemName: duplicate.itemName,
-          itemModelNumber: duplicate.itemModelNumber,
-          itemKey: duplicate.itemKey,
+          sku: duplicate.sku,
         }
       : null,
   });
@@ -1595,8 +1575,7 @@ export async function createProduct(req: Request, res: Response) {
     }
 
     const duplicate = await findDuplicateProduct({
-      itemModelNumber: payload.itemModelNumber,
-      itemKey: payload.itemKey,
+      sku: payload.sku as string,
     });
 
     if (duplicate) {
@@ -1692,12 +1671,7 @@ export async function updateProduct(req: Request, res: Response) {
     }
 
     const duplicate = await findDuplicateProduct({
-      itemModelNumber:
-        typeof payload.itemModelNumber === "string"
-          ? payload.itemModelNumber
-          : existing.itemModelNumber,
-      itemKey:
-        typeof payload.itemKey === "string" ? payload.itemKey : existing.itemKey,
+      sku: typeof payload.sku === "string" ? payload.sku : existing.sku,
       excludeId: id,
     });
 
