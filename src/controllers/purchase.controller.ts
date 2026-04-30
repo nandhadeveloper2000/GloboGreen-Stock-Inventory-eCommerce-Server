@@ -6,6 +6,43 @@ import {
 } from "../models/purchase.model";
 import { VendorModel } from "../models/vendor.model";
 import { ShopProductModel } from "../models/shopProduct.model";
+import { buildNextInvoiceNumber } from "../utils/invoiceNumber";
+
+type PurchaseMode = "SINGLE_SUPPLIER" | "MULTI_SUPPLIER";
+
+type PreparedPurchaseOrder = {
+  mode: PurchaseMode;
+  supplierId: string | null;
+  purchaseDate: Date;
+  invoiceNo: string;
+  invoiceDate: Date | null;
+  payMode: string;
+  items: PurchaseOrderItemInput[];
+  itemCount: number;
+  totalQty: number;
+  subtotal: number;
+  taxAmount: number;
+  discountAmount: number;
+  overallDiscount: number;
+  netAmount: number;
+  notes: string;
+};
+
+type PurchaseStockAggregate = {
+  qty: number;
+  purchasePrice: number;
+};
+
+const PURCHASE_BAD_REQUEST_MESSAGES = new Set([
+  "Invalid purchase mode",
+  "At least one purchase item is required",
+  "Valid supplier is required",
+  "Supplier is required for every item",
+  "Invalid supplier found in item row",
+  "Product name is required",
+  "Linked shop product not found for purchase update",
+  "Cancelled purchase order cannot be updated",
+]);
 
 function norm(value: unknown) {
   return String(value ?? "").trim();
@@ -27,6 +64,13 @@ function toNumber(value: unknown, fallback = 0) {
 
 function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function isPurchaseBadRequest(message: string) {
+  return (
+    PURCHASE_BAD_REQUEST_MESSAGES.has(message) ||
+    message.startsWith("Cannot reduce stock below zero")
+  );
 }
 
 function getUserId(req: Request) {
@@ -113,13 +157,73 @@ function calculateItem(item: any) {
     },
     purchaseAfterTax: roundMoney(purchaseAfterTax),
     amount: roundMoney(purchaseAfterTax),
-    taxAmount: roundMoney(taxAmount),
   };
+}
+
+function getEntityId(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return isObjectId(value) ? value : "";
+  if (value instanceof mongoose.Types.ObjectId) return String(value);
+
+  if (typeof value === "object") {
+    const record = value as {
+      _id?: unknown;
+      id?: unknown;
+      toString?: () => string;
+    };
+
+    const nestedId = getEntityId(record._id) || getEntityId(record.id);
+
+    if (nestedId) {
+      return nestedId;
+    }
+
+    if (typeof record.toString === "function") {
+      const stringValue = record.toString();
+
+      if (isObjectId(stringValue)) {
+        return stringValue;
+      }
+    }
+  }
+
+  const fallback = String(value);
+  return isObjectId(fallback) ? fallback : "";
 }
 
 async function generatePurchaseNo(shopId: string) {
   const count = await PurchaseOrderModel.countDocuments({ shopId });
   return `PO-${String(count + 1).padStart(6, "0")}`;
+}
+
+async function generatePurchaseInvoiceNo(
+  shopId: string,
+  session?: mongoose.ClientSession,
+  excludePurchaseId?: string
+) {
+  return buildNextInvoiceNumber(
+    shopId,
+    async (_prefix, matcher) => {
+      const filter: Record<string, unknown> = {
+        shopId,
+        invoiceNo: { $regex: matcher },
+      };
+
+      if (excludePurchaseId && isObjectId(excludePurchaseId)) {
+        filter._id = {
+          $ne: new mongoose.Types.ObjectId(excludePurchaseId),
+        };
+      }
+
+      const docs = await PurchaseOrderModel.find(filter)
+        .select("invoiceNo")
+        .session(session || null)
+        .lean();
+
+      return docs.map((doc) => doc.invoiceNo);
+    },
+    session
+  );
 }
 
 async function validateSupplier(supplierId: string, shopId: string) {
@@ -134,27 +238,223 @@ async function validateSupplier(supplierId: string, shopId: string) {
   }).select("_id vendorName status shopId");
 }
 
-async function updateStockFromPurchase(order: any) {
-  for (const item of order.items || []) {
-    if (!item.shopProductId || !isObjectId(item.shopProductId)) continue;
+function aggregatePurchaseStock(items: Array<any> = []) {
+  const stock = new Map<string, PurchaseStockAggregate>();
 
-    await ShopProductModel.findOneAndUpdate(
-      {
-        _id: item.shopProductId,
-        shopId: order.shopId,
-      },
-      {
-        $inc: {
-          qty: Number(item.qty || 0),
-          purchaseQty: Number(item.qty || 0),
-        },
-        $set: {
-          inputPrice: Number(item.purchasePrice || 0),
-        },
-      },
-      { new: true }
+  for (const item of items) {
+    const shopProductId = getEntityId(item?.shopProductId);
+
+    if (!shopProductId) continue;
+
+    const current = stock.get(shopProductId) || {
+      qty: 0,
+      purchasePrice: 0,
+    };
+
+    current.qty += toNumber(item?.qty, 0);
+    current.purchasePrice = roundMoney(toNumber(item?.purchasePrice, 0));
+
+    stock.set(shopProductId, current);
+  }
+
+  return stock;
+}
+
+async function syncPurchaseStock(
+  shopId: string,
+  previousItems: Array<any>,
+  nextItems: Array<any>,
+  session: mongoose.ClientSession
+) {
+  const previousStock = aggregatePurchaseStock(previousItems);
+  const nextStock = aggregatePurchaseStock(nextItems);
+  const productIds = Array.from(
+    new Set([...previousStock.keys(), ...nextStock.keys()])
+  );
+
+  if (!productIds.length) {
+    return;
+  }
+
+  const products = await ShopProductModel.find({
+    _id: { $in: productIds },
+    shopId,
+  })
+    .select("_id itemName qty purchaseQty inputPrice")
+    .session(session);
+
+  const productMap = new Map(
+    products.map((product) => [String(product._id), product])
+  );
+
+  for (const productId of productIds) {
+    const doc = productMap.get(productId);
+
+    if (!doc) {
+      throw new Error("Linked shop product not found for purchase update");
+    }
+
+    const previousQty = previousStock.get(productId)?.qty || 0;
+    const nextQty = nextStock.get(productId)?.qty || 0;
+    const delta = nextQty - previousQty;
+
+    const currentQty = Number((doc as any).qty || 0);
+    const currentPurchaseQty = Number((doc as any).purchaseQty || 0);
+
+    if (currentQty + delta < 0 || currentPurchaseQty + delta < 0) {
+      throw new Error(
+        `Cannot reduce stock below zero for ${(doc as any).itemName || "linked product"}`
+      );
+    }
+  }
+
+  for (const productId of productIds) {
+    const doc = productMap.get(productId);
+
+    if (!doc) continue;
+
+    const previousQty = previousStock.get(productId)?.qty || 0;
+    const nextState = nextStock.get(productId);
+    const nextQty = nextState?.qty || 0;
+    const delta = nextQty - previousQty;
+
+    const update: Record<string, any> = {};
+
+    if (delta !== 0) {
+      update.$inc = {
+        qty: delta,
+        purchaseQty: delta,
+      };
+    }
+
+    if (nextState) {
+      update.$set = {
+        inputPrice: nextState.purchasePrice,
+      };
+    }
+
+    if (!Object.keys(update).length) {
+      continue;
+    }
+
+    await ShopProductModel.updateOne(
+      { _id: productId, shopId },
+      update,
+      { session }
     );
   }
+}
+
+async function buildPurchasePayload(
+  req: Request,
+  shopId: string
+): Promise<PreparedPurchaseOrder> {
+  const body = req.body || {};
+  const mode = upper(body.mode || "SINGLE_SUPPLIER");
+
+  if (!["SINGLE_SUPPLIER", "MULTI_SUPPLIER"].includes(mode)) {
+    throw new Error("Invalid purchase mode");
+  }
+
+  const itemsInput = Array.isArray(body.items) ? body.items : [];
+
+  if (!itemsInput.length) {
+    throw new Error("At least one purchase item is required");
+  }
+
+  const headerSupplierId = norm(body.supplierId);
+
+  if (mode === "SINGLE_SUPPLIER") {
+    const supplier = await validateSupplier(headerSupplierId, shopId);
+
+    if (!supplier) {
+      throw new Error("Valid supplier is required");
+    }
+  }
+
+  const items: PurchaseOrderItemInput[] = [];
+
+  for (const row of itemsInput) {
+    const rowSupplierId =
+      mode === "SINGLE_SUPPLIER" ? headerSupplierId : norm(row.supplierId);
+
+    if (!rowSupplierId || !isObjectId(rowSupplierId)) {
+      throw new Error("Supplier is required for every item");
+    }
+
+    const supplier = await validateSupplier(rowSupplierId, shopId);
+
+    if (!supplier) {
+      throw new Error("Invalid supplier found in item row");
+    }
+
+    const productName = norm(row.productName);
+
+    if (!productName) {
+      throw new Error("Product name is required");
+    }
+
+    const calculated = calculateItem(row);
+
+    items.push({
+      supplierId: rowSupplierId,
+      shopProductId: getEntityId(row.shopProductId) || null,
+      productId: getEntityId(row.productId) || null,
+      itemCode: upper(row.itemCode),
+      productName,
+      batch: norm(row.batch),
+      qty: calculated.qty,
+      purchasePrice: calculated.purchasePrice,
+      discount: calculated.discount,
+      tax: calculated.tax,
+      purchaseAfterTax: calculated.purchaseAfterTax,
+      amount: calculated.amount,
+    });
+  }
+
+  const subtotal = roundMoney(
+    items.reduce((sum, item) => sum + item.qty * item.purchasePrice, 0)
+  );
+
+  const taxAmount = roundMoney(
+    items.reduce((sum, item) => {
+      const gross = item.qty * item.purchasePrice;
+      const afterDiscount = Math.max(gross - item.discount.amount, 0);
+      return sum + (afterDiscount * item.tax.percent) / 100;
+    }, 0)
+  );
+
+  const lineDiscountAmount = roundMoney(
+    items.reduce((sum, item) => sum + item.discount.amount, 0)
+  );
+
+  const overallDiscount = roundMoney(toNumber(body.overallDiscount, 0));
+  const discountAmount = roundMoney(lineDiscountAmount + overallDiscount);
+
+  const netAmount = roundMoney(
+    Math.max(
+      items.reduce((sum, item) => sum + item.amount, 0) - overallDiscount,
+      0
+    )
+  );
+
+  return {
+    mode: mode as PurchaseMode,
+    supplierId: mode === "SINGLE_SUPPLIER" ? headerSupplierId : null,
+    purchaseDate: parseDate(body.purchaseDate, new Date()) || new Date(),
+    invoiceNo: norm(body.invoiceNo),
+    invoiceDate: body.invoiceDate ? parseDate(body.invoiceDate, null) : null,
+    payMode: upper(body.payMode || "CASH"),
+    items,
+    itemCount: items.length,
+    totalQty: items.reduce((sum, item) => sum + item.qty, 0),
+    subtotal,
+    taxAmount,
+    discountAmount,
+    overallDiscount,
+    netAmount,
+    notes: norm(body.notes),
+  };
 }
 
 export async function createPurchaseOrder(req: Request, res: Response) {
@@ -170,156 +470,38 @@ export async function createPurchaseOrder(req: Request, res: Response) {
       });
     }
 
-    const body = req.body || {};
-    const mode = upper(body.mode || "SINGLE_SUPPLIER");
-
-    if (!["SINGLE_SUPPLIER", "MULTI_SUPPLIER"].includes(mode)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid purchase mode",
-      });
-    }
-
-    const itemsInput = Array.isArray(body.items) ? body.items : [];
-
-    if (!itemsInput.length) {
-      return res.status(400).json({
-        success: false,
-        message: "At least one purchase item is required",
-      });
-    }
-
-    const headerSupplierId = norm(body.supplierId);
-
-    if (mode === "SINGLE_SUPPLIER") {
-      const supplier = await validateSupplier(headerSupplierId, shopId);
-
-      if (!supplier) {
-        return res.status(400).json({
-          success: false,
-          message: "Valid supplier is required",
-        });
-      }
-    }
-
-    const items: PurchaseOrderItemInput[] = [];
-
-    for (const row of itemsInput) {
-      const rowSupplierId =
-        mode === "SINGLE_SUPPLIER" ? headerSupplierId : norm(row.supplierId);
-
-      if (!rowSupplierId || !isObjectId(rowSupplierId)) {
-        return res.status(400).json({
-          success: false,
-          message: "Supplier is required for every item",
-        });
-      }
-
-      const supplier = await validateSupplier(rowSupplierId, shopId);
-
-      if (!supplier) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid supplier found in item row",
-        });
-      }
-
-      const productName = norm(row.productName);
-
-      if (!productName) {
-        return res.status(400).json({
-          success: false,
-          message: "Product name is required",
-        });
-      }
-
-      const calculated = calculateItem(row);
-
-      items.push({
-        supplierId: rowSupplierId,
-        shopProductId: isObjectId(row.shopProductId) ? row.shopProductId : null,
-        productId: isObjectId(row.productId) ? row.productId : null,
-        itemCode: upper(row.itemCode),
-        productName,
-        batch: norm(row.batch),
-        qty: calculated.qty,
-        purchasePrice: calculated.purchasePrice,
-        discount: calculated.discount,
-        tax: calculated.tax,
-        purchaseAfterTax: calculated.purchaseAfterTax,
-        amount: calculated.amount,
-      });
-    }
-
-    const subtotal = roundMoney(
-      items.reduce((sum, item) => sum + item.qty * item.purchasePrice, 0)
-    );
-
-    const taxAmount = roundMoney(
-      items.reduce((sum, item) => {
-        const gross = item.qty * item.purchasePrice;
-        const afterDiscount = Math.max(gross - item.discount.amount, 0);
-        return sum + (afterDiscount * item.tax.percent) / 100;
-      }, 0)
-    );
-
-    const lineDiscountAmount = roundMoney(
-      items.reduce((sum, item) => sum + item.discount.amount, 0)
-    );
-
-    const overallDiscount = roundMoney(toNumber(body.overallDiscount, 0));
-    const discountAmount = roundMoney(lineDiscountAmount + overallDiscount);
-
-    const netAmount = roundMoney(
-      Math.max(
-        items.reduce((sum, item) => sum + item.amount, 0) - overallDiscount,
-        0
-      )
-    );
-
-    const totalQty = items.reduce((sum, item) => sum + item.qty, 0);
+    const payload = await buildPurchasePayload(req, shopId);
     const purchaseNo = await generatePurchaseNo(shopId);
-
-    let createdOrder: any = null;
+    const createdBy = buildCreatedBy(req);
+    let createdOrderId = "";
 
     await session.withTransaction(async () => {
+      const invoiceNo =
+        payload.invoiceNo || (await generatePurchaseInvoiceNo(shopId, session));
+
       const docs = await PurchaseOrderModel.create(
         [
           {
             shopId,
             purchaseNo,
-            mode,
-            supplierId: mode === "SINGLE_SUPPLIER" ? headerSupplierId : null,
-            purchaseDate: parseDate(body.purchaseDate, new Date()),
-            invoiceNo: norm(body.invoiceNo),
-            invoiceDate: body.invoiceDate
-              ? parseDate(body.invoiceDate, null)
-              : null,
-            payMode: upper(body.payMode || "CASH"),
-            items,
-            itemCount: items.length,
-            totalQty,
-            subtotal,
-            taxAmount,
-            discountAmount,
-            overallDiscount,
-            netAmount,
+            ...payload,
+            invoiceNo,
             status: "SAVED",
-            notes: norm(body.notes),
-            createdBy: buildCreatedBy(req),
+            createdBy,
           },
         ],
         { session }
       );
 
-      createdOrder = docs[0];
+      const createdOrder = docs[0];
+      createdOrderId = String(createdOrder._id);
 
-      await updateStockFromPurchase(createdOrder);
+      await syncPurchaseStock(shopId, [], createdOrder.items || [], session);
     });
 
-    const populated = await PurchaseOrderModel.findById(createdOrder._id)
-      .populate("supplierId", "vendorName code")
-      .populate("items.supplierId", "vendorName code")
+    const populated = await PurchaseOrderModel.findById(createdOrderId)
+      .populate("supplierId", "vendorName code mobile email address gstNumber")
+      .populate("items.supplierId", "vendorName code mobile email address gstNumber")
       .lean();
 
     return res.status(201).json({
@@ -328,12 +510,109 @@ export async function createPurchaseOrder(req: Request, res: Response) {
       data: populated,
     });
   } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to create purchase order";
+
+    if (isPurchaseBadRequest(message)) {
+      return res.status(400).json({
+        success: false,
+        message,
+      });
+    }
+
     return res.status(500).json({
       success: false,
-      message:
-        error instanceof Error
-          ? error.message
-          : "Failed to create purchase order",
+      message,
+    });
+  } finally {
+    session.endSession();
+  }
+}
+
+export async function updatePurchaseOrder(req: Request, res: Response) {
+  const session = await mongoose.startSession();
+
+  try {
+    const shopId = norm(req.params.shopId);
+    const id = norm(req.params.id);
+
+    if (!shopId || !isObjectId(shopId) || !id || !isObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid request",
+      });
+    }
+
+    const payload = await buildPurchasePayload(req, shopId);
+    let updatedOrderId = "";
+
+    await session.withTransaction(async () => {
+      const existing = await PurchaseOrderModel.findOne({ _id: id, shopId }).session(
+        session
+      );
+
+      if (!existing) {
+        throw new Error("Purchase order not found");
+      }
+
+      if (String((existing as any).status || "").toUpperCase() === "CANCELLED") {
+        throw new Error("Cancelled purchase order cannot be updated");
+      }
+
+      const invoiceNo =
+        payload.invoiceNo ||
+        norm((existing as any).invoiceNo) ||
+        (await generatePurchaseInvoiceNo(shopId, session, id));
+
+      await syncPurchaseStock(
+        shopId,
+        (existing as any).items || [],
+        payload.items,
+        session
+      );
+
+      existing.set({
+        ...payload,
+        invoiceNo,
+      });
+
+      await existing.save({ session });
+      updatedOrderId = String(existing._id);
+    });
+
+    const populated = await PurchaseOrderModel.findById(updatedOrderId)
+      .populate("supplierId", "vendorName code mobile email address gstNumber")
+      .populate("items.supplierId", "vendorName code mobile email address gstNumber")
+      .lean();
+
+    return res.json({
+      success: true,
+      message: "Purchase order updated successfully",
+      data: populated,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to update purchase order";
+
+    if (message === "Purchase order not found") {
+      return res.status(404).json({
+        success: false,
+        message,
+      });
+    }
+
+    if (isPurchaseBadRequest(message)) {
+      return res.status(400).json({
+        success: false,
+        message,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message,
     });
   } finally {
     session.endSession();
@@ -368,8 +647,8 @@ export async function listPurchaseOrders(req: Request, res: Response) {
     }
 
     const data = await PurchaseOrderModel.find(filter)
-      .populate("supplierId", "vendorName code")
-      .populate("items.supplierId", "vendorName code")
+      .populate("supplierId", "vendorName code mobile email address gstNumber")
+      .populate("items.supplierId", "vendorName code mobile email address gstNumber")
       .sort({ purchaseDate: -1, createdAt: -1 })
       .lean();
 
@@ -400,8 +679,8 @@ export async function getPurchaseOrder(req: Request, res: Response) {
     }
 
     const data = await PurchaseOrderModel.findOne({ _id: id, shopId })
-      .populate("supplierId", "vendorName code")
-      .populate("items.supplierId", "vendorName code")
+      .populate("supplierId", "vendorName code mobile email address gstNumber")
+      .populate("items.supplierId", "vendorName code mobile email address gstNumber")
       .lean();
 
     if (!data) {

@@ -23,8 +23,10 @@ import shopProductRoutes from "./shopProduct.routes";
 import customerRoutes from "./customer.public.routes";
 import customerShopRoutes from "./customer.shop.routes";
 import orderRoutes from "./order.routes";
+import invoiceRoutes from "./invoice.routes";
 import locationRoutes from "./location.routes";
 import purchaseRoutes from "./purchase.routes";
+import purchaseReturnRoutes from "./purchaseReturn.routes";
 
 const router = Router();
 
@@ -56,12 +58,14 @@ router.use("/vendors", vendorGlobalRoutes);
 router.use("/products", productGlobalRoutes);
 router.use("/shop-products", shopProductRoutes);
 router.use("/purchase", purchaseRoutes);
+router.use("/purchase-returns", purchaseReturnRoutes);
 /* ---------------- CUSTOMER ---------------- */
 router.use("/customer", customerRoutes);
 router.use("/customer/shops", customerShopRoutes);
 
 /* ---------------- OTHER ---------------- */
 router.use("/orders", orderRoutes);
+router.use("/invoices", invoiceRoutes);
 router.use("/locations", locationRoutes);
 
 export default router;

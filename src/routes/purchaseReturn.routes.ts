@@ -2,12 +2,12 @@ import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
 import {
-  cancelPurchaseOrder,
-  createPurchaseOrder,
-  getPurchaseOrder,
-  listPurchaseOrders,
-  updatePurchaseOrder,
-} from "../controllers/purchase.controller";
+  createPurchaseReturn,
+  getPurchaseReturn,
+  listEligiblePurchaseOrders,
+  listPurchaseReturns,
+  updatePurchaseReturn,
+} from "../controllers/purchaseReturn.controller";
 
 const router = Router();
 
@@ -28,13 +28,6 @@ const CREATE_ROLES = [
   "SHOP_SUPERVISOR",
 ] as const;
 
-const DELETE_ROLES = [
-  "MASTER_ADMIN",
-  "MANAGER",
-  "SHOP_OWNER",
-  "SHOP_MANAGER",
-] as const;
-
 const UPDATE_ROLES = [
   "MASTER_ADMIN",
   "MANAGER",
@@ -44,38 +37,38 @@ const UPDATE_ROLES = [
 ] as const;
 
 router.get(
+  "/:shopId/eligible-purchases",
+  auth,
+  requireRoles(...VIEW_ROLES),
+  listEligiblePurchaseOrders
+);
+
+router.get(
   "/:shopId",
   auth,
   requireRoles(...VIEW_ROLES),
-  listPurchaseOrders
+  listPurchaseReturns
 );
 
 router.get(
   "/:shopId/:id",
   auth,
   requireRoles(...VIEW_ROLES),
-  getPurchaseOrder
+  getPurchaseReturn
 );
 
 router.post(
   "/:shopId",
   auth,
   requireRoles(...CREATE_ROLES),
-  createPurchaseOrder
+  createPurchaseReturn
 );
 
 router.put(
   "/:shopId/:id",
   auth,
   requireRoles(...UPDATE_ROLES),
-  updatePurchaseOrder
-);
-
-router.patch(
-  "/:shopId/:id/cancel",
-  auth,
-  requireRoles(...DELETE_ROLES),
-  cancelPurchaseOrder
+  updatePurchaseReturn
 );
 
 export default router;

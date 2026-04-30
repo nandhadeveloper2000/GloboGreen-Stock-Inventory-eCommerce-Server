@@ -151,11 +151,30 @@ const ShopProductSchema = new Schema(
       index: true,
     },
 
+    itemCode: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+    },
+
     itemName: {
       type: String,
       default: "",
       trim: true,
       index: true,
+    },
+
+    itemModelNumber: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    itemKey: {
+      type: String,
+      default: "",
+      trim: true,
     },
 
     masterCategoryId: {
@@ -432,8 +451,20 @@ ShopProductSchema.pre("validate", function () {
     doc.sku = String(doc.sku).trim().toUpperCase();
   }
 
+  if (doc.itemCode) {
+    doc.itemCode = String(doc.itemCode).trim().toUpperCase();
+  }
+
   if (doc.itemName) {
     doc.itemName = String(doc.itemName).trim();
+  }
+
+  if (doc.itemModelNumber) {
+    doc.itemModelNumber = String(doc.itemModelNumber).trim();
+  }
+
+  if (doc.itemKey) {
+    doc.itemKey = String(doc.itemKey).trim();
   }
 
   doc.masterCategoryId = doc.masterCategoryId || null;

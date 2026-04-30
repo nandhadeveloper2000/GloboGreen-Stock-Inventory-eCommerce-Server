@@ -1,4 +1,12 @@
-import { Schema, model, type HydratedDocument, type InferSchemaType } from "mongoose";
+import {
+  Schema,
+  model,
+  models,
+  type HydratedDocument,
+  type InferSchemaType,
+  type Model,
+} from "mongoose";
+import { buildNextInvoiceNumber } from "../utils/invoiceNumber";
 
 const PartySchema = new Schema(
   {
@@ -71,12 +79,27 @@ const InvoiceSchema = new Schema(
 type Invoice = InferSchemaType<typeof InvoiceSchema>;
 type InvoiceDocument = HydratedDocument<Invoice>;
 
-InvoiceSchema.pre("save", async function (this: InvoiceDocument) {
+InvoiceSchema.pre("validate", async function (this: InvoiceDocument) {
   if (this.invoiceNo) return;
 
-  const ts = Date.now().toString().slice(-8);
-  const rand = Math.floor(Math.random() * 9000 + 1000);
-  this.invoiceNo = `INV${ts}${rand}`;
+  const modelRef = this.constructor as Model<Invoice>;
+  const shopId = this.shopId ? String(this.shopId) : "";
+
+  this.invoiceNo = await buildNextInvoiceNumber(
+    shopId,
+    async (_prefix, matcher) => {
+      const docs = await modelRef
+        .find({
+          shopId: this.shopId || null,
+          invoiceNo: { $regex: matcher },
+        })
+        .select("invoiceNo")
+        .lean();
+
+      return docs.map((doc) => doc.invoiceNo);
+    }
+  );
 });
 
-export const InvoiceModel = model("Invoice", InvoiceSchema);
+export const InvoiceModel =
+  (models.Invoice as Model<Invoice>) || model<Invoice>("Invoice", InvoiceSchema);

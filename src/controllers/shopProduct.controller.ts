@@ -578,9 +578,14 @@ function validateNormalProductPayload(payload: any, isWholesaleShop: boolean) {
 }
 
 function buildProductSnapshot(product: any) {
+  const sku = String(product?.sku || "").trim().toUpperCase();
+
   return {
-    sku: String(product?.sku || "").trim().toUpperCase(),
+    sku,
+    itemCode: sku,
     itemName: String(product?.itemName || "").trim(),
+    itemModelNumber: String(product?.itemModelNumber || "").trim(),
+    itemKey: String(product?.itemKey || "").trim(),
     masterCategoryId: product?.masterCategoryId || null,
     categoryId: product?.categoryId || null,
     subcategoryId: product?.subcategoryId || null,
@@ -593,7 +598,7 @@ function productPopulate() {
   return {
     path: "productId",
     select:
-      "_id itemName sku description configurationMode images videos variant masterCategoryId categoryId subcategoryId brandId modelId isActiveGlobal isActive approvalStatus",
+      "_id itemName itemModelNumber itemKey sku description configurationMode images videos variant masterCategoryId categoryId subcategoryId brandId modelId isActiveGlobal isActive approvalStatus",
     populate: [
       { path: "masterCategoryId", select: "_id name image" },
       { path: "categoryId", select: "_id name image masterCategoryId" },
@@ -682,7 +687,7 @@ export async function addProductToShop(req: Request, res: Response) {
     }
 
     const product = await ProductModel.findById(productId).select(
-      "_id itemName sku masterCategoryId categoryId subcategoryId brandId modelId configurationMode variant images isActiveGlobal isActive approvalStatus"
+      "_id itemName itemModelNumber itemKey sku masterCategoryId categoryId subcategoryId brandId modelId configurationMode variant images isActiveGlobal isActive approvalStatus"
     );
 
     if (!product) {
@@ -1067,7 +1072,7 @@ export async function listAvailableProductsForShop(req: Request, res: Response) 
 
     const data = await ProductModel.find(filter)
       .select(
-        "_id itemName sku description configurationMode images videos variant masterCategoryId categoryId subcategoryId brandId modelId isActiveGlobal isActive approvalStatus"
+        "_id itemName itemModelNumber itemKey sku description configurationMode images videos variant masterCategoryId categoryId subcategoryId brandId modelId isActiveGlobal isActive approvalStatus"
       )
       .sort({ itemName: 1 })
       .populate("masterCategoryId", "_id name image")
