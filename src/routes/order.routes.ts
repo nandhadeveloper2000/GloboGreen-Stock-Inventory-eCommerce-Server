@@ -30,7 +30,7 @@ router.get(
 router.get(
   "/",
   auth,
-  requireRoles("MASTER_ADMIN", "MANAGER", "SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR"),
+  requireRoles("MASTER_ADMIN", "MANAGER", "SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
   listOrders
 );
 router.put(

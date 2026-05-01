@@ -25,7 +25,7 @@ router.post(
 router.post(
   "/direct-purchase",
   auth,
-  requireRoles("MASTER_ADMIN", "MANAGER", "SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR"),
+  requireRoles("MASTER_ADMIN", "MANAGER", "SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
   createDirectPurchaseInvoice
 );
 

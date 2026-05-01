@@ -8,6 +8,19 @@ import {
 } from "mongoose";
 import { buildNextInvoiceNumber } from "../utils/invoiceNumber";
 
+export const INVOICE_PAYMENT_METHODS = [
+  "COD",
+  "ONLINE",
+  "CASH",
+  "UPI",
+  "CARD",
+  "BANK_TRANSFER",
+  "CHEQUE",
+  "CREDIT",
+  "SPLIT",
+] as const;
+export type InvoicePaymentMethod = (typeof INVOICE_PAYMENT_METHODS)[number];
+
 const PartySchema = new Schema(
   {
     name: { type: String, default: "" },
@@ -29,10 +42,19 @@ const PartySchema = new Schema(
 const InvoiceItemSchema = new Schema(
   {
     productId: { type: Schema.Types.ObjectId, ref: "Product", required: true },
+    shopProductId: { type: Schema.Types.ObjectId, ref: "ShopProduct", default: null },
     name: { type: String, required: true, trim: true },
     sku: { type: String, default: "" },
+    itemCode: { type: String, default: "", trim: true, uppercase: true },
+    batch: { type: String, default: "", trim: true },
+    unit: { type: String, default: "Pcs", trim: true },
+    mrp: { type: Number, default: 0, min: 0 },
     qty: { type: Number, required: true, min: 1 },
     price: { type: Number, required: true, min: 0 },
+    discountPercent: { type: Number, default: 0, min: 0, max: 100 },
+    discountAmount: { type: Number, default: 0, min: 0 },
+    taxPercent: { type: Number, default: 0, min: 0, max: 100 },
+    taxAmount: { type: Number, default: 0, min: 0 },
     lineTotal: { type: Number, required: true, min: 0 },
   },
   { _id: false }
@@ -40,10 +62,19 @@ const InvoiceItemSchema = new Schema(
 
 const PaymentSchema = new Schema(
   {
-    method: { type: String, enum: ["COD", "ONLINE"], default: "COD" },
+    method: {
+      type: String,
+      enum: INVOICE_PAYMENT_METHODS,
+      default: "COD",
+    },
     paid: { type: Boolean, default: false },
     provider: { type: String, default: "" },
     txnId: { type: String, default: "" },
+    receivedAmount: { type: Number, default: 0, min: 0 },
+    changeAmount: { type: Number, default: 0, min: 0 },
+    reference: { type: String, default: "", trim: true },
+    salesmanName: { type: String, default: "", trim: true },
+    notes: { type: String, default: "", trim: true },
   },
   { _id: false }
 );

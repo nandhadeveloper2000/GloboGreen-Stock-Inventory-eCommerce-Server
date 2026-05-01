@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 
 import { CustomerModel } from "../models/customer.model";
+import { OrderModel } from "../models/order.model";
+import { SalesReturnModel } from "../models/salesReturn.model";
 import { generateOtp, hashOtp, verifyOtp } from "../utils/otp";
 import { sendEmailOtp } from "../utils/sendEmailOtp";
 import { uploadImage } from "../utils/uploadImage";
@@ -16,6 +18,52 @@ function isObjectId(id: unknown) {
 
 const normTrim = (v: unknown) => String(v ?? "").trim();
 const normLower = (v: unknown) => String(v ?? "").trim().toLowerCase();
+const normUpper = (v: unknown) => String(v ?? "").trim().toUpperCase();
+
+function parseAmount(value: unknown, fallback = 0) {
+  const amount = Number(value);
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    return fallback;
+  }
+
+  return Math.round((amount + Number.EPSILON) * 100) / 100;
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function formatLabel(value: unknown, fallback = "-") {
+  const cleaned = normTrim(value);
+
+  if (!cleaned) return fallback;
+
+  return cleaned
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function parseDateBoundary(value: unknown, endOfDay = false) {
+  const raw = normTrim(value);
+
+  if (!raw) return null;
+
+  const date = new Date(raw);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  if (endOfDay) {
+    date.setHours(23, 59, 59, 999);
+  } else {
+    date.setHours(0, 0, 0, 0);
+  }
+
+  return date;
+}
 
 function safeCustomer(doc: any) {
   const o = doc?.toObject ? doc.toObject() : doc;
@@ -283,6 +331,16 @@ export async function createCustomer(req: Request, res: Response) {
       req.body?.mobile !== undefined ? normTrim(req.body?.mobile) : "";
     const email =
       req.body?.email !== undefined ? normLower(req.body?.email) : "";
+    const gstNumber =
+      req.body?.gstNumber !== undefined ? normUpper(req.body?.gstNumber) : "";
+    const state =
+      req.body?.state !== undefined ? normTrim(req.body?.state) : "";
+    const address =
+      req.body?.address !== undefined ? normTrim(req.body?.address) : "";
+    const openingBalance = parseAmount(req.body?.openingBalance, 0);
+    const dueBalance = parseAmount(req.body?.dueBalance, openingBalance);
+    const points = Math.max(0, Math.floor(parseAmount(req.body?.points, 0)));
+    const isWalkIn = parseBoolean(req.body?.isWalkIn) ?? false;
     const isActive = parseBoolean(req.body?.isActive) ?? true;
 
     const addresses = parseAddressesFromBody(req.body?.addresses) ?? [];
@@ -320,6 +378,13 @@ export async function createCustomer(req: Request, res: Response) {
       name,
       mobile,
       email,
+      gstNumber,
+      state,
+      address,
+      openingBalance,
+      dueBalance,
+      points,
+      isWalkIn,
       isActive,
       avatarUrl,
       avatarPublicId,
@@ -344,14 +409,27 @@ export async function listCustomers(req: Request, res: Response) {
     const page = Math.max(1, Number(req.query?.page || 1));
     const limit = Math.min(100, Math.max(1, Number(req.query?.limit || 20)));
     const skip = (page - 1) * limit;
+    const includeWalkIn = parseBoolean(req.query?.includeWalkIn) ?? true;
+    const isActive = parseBoolean(req.query?.isActive);
 
     const query: any = {};
+
+    if (!includeWalkIn) {
+      query.isWalkIn = { $ne: true };
+    }
+
+    if (isActive !== undefined) {
+      query.isActive = isActive;
+    }
 
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: "i" } },
         { mobile: { $regex: search, $options: "i" } },
         { email: { $regex: search, $options: "i" } },
+        { gstNumber: { $regex: search, $options: "i" } },
+        { state: { $regex: search, $options: "i" } },
+        { address: { $regex: search, $options: "i" } },
       ];
     }
 
@@ -410,6 +488,168 @@ export async function getCustomer(req: Request, res: Response) {
   }
 }
 
+export async function getCustomerLedger(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const shopId = normTrim(req.query?.shopId);
+    const startDate = parseDateBoundary(req.query?.startDate, false);
+    const endDate = parseDateBoundary(req.query?.endDate, true);
+
+    if (!isObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid id",
+      });
+    }
+
+    if (shopId && !isObjectId(shopId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid shop id",
+      });
+    }
+
+    const customer = await CustomerModel.findById(id);
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const orderFilter: Record<string, any> = {
+      customerId: customer._id,
+      source: "DIRECT",
+      status: { $ne: "CANCELLED" },
+    };
+
+    const returnFilter: Record<string, any> = {
+      customerId: customer._id,
+    };
+
+    if (shopId) {
+      orderFilter.shopId = new mongoose.Types.ObjectId(shopId);
+      returnFilter.shopId = new mongoose.Types.ObjectId(shopId);
+    }
+
+    if (startDate || endDate) {
+      orderFilter.createdAt = {};
+      returnFilter.returnDate = {};
+
+      if (startDate) {
+        orderFilter.createdAt.$gte = startDate;
+        returnFilter.returnDate.$gte = startDate;
+      }
+
+      if (endDate) {
+        orderFilter.createdAt.$lte = endDate;
+        returnFilter.returnDate.$lte = endDate;
+      }
+    }
+
+    const [orders, returns] = await Promise.all([
+      OrderModel.find(orderFilter)
+        .select(
+          "orderNo invoiceNo itemCount totalQty grandTotal createdAt payment status"
+        )
+        .sort({ createdAt: -1 })
+        .lean(),
+      SalesReturnModel.find(returnFilter)
+        .select(
+          "returnNo totalQty totalReturnAmount reason returnDate createdAt status"
+        )
+        .sort({ returnDate: -1, createdAt: -1 })
+        .lean(),
+    ]);
+
+    const salesAmount = roundMoney(
+      orders.reduce((sum, item: any) => sum + Number(item?.grandTotal || 0), 0)
+    );
+    const returnAmount = roundMoney(
+      returns.reduce(
+        (sum, item: any) => sum + Number(item?.totalReturnAmount || 0),
+        0
+      )
+    );
+
+    const paymentRows = orders.filter(
+      (item: any) => Number(item?.payment?.receivedAmount || 0) > 0
+    );
+    const paymentAmount = roundMoney(
+      paymentRows.reduce(
+        (sum, item: any) => sum + Number(item?.payment?.receivedAmount || 0),
+        0
+      )
+    );
+
+    const activities = [
+      ...orders.map((item: any) => ({
+        id: String(item._id || ""),
+        date: item.createdAt || null,
+        type: "SALE",
+        reference: item.invoiceNo || item.orderNo || "-",
+        description: `Products sold (${Number(item.itemCount || 0)} items)`,
+        paymentMethod: formatLabel(item?.payment?.method),
+        status: formatLabel(item?.status),
+        amount: roundMoney(Number(item.grandTotal || 0)),
+      })),
+      ...returns.map((item: any) => ({
+        id: String(item._id || ""),
+        date: item.returnDate || item.createdAt || null,
+        type: "RETURN",
+        reference: item.returnNo || "-",
+        description: `${normTrim(item.reason) || "Sales return"} (${Number(
+          item.totalQty || 0
+        )} qty)`,
+        paymentMethod: "-",
+        status: formatLabel(item?.status),
+        amount: roundMoney(Number(item.totalReturnAmount || 0) * -1),
+      })),
+    ].sort((left, right) => {
+      const leftTime = left.date ? new Date(left.date).getTime() : 0;
+      const rightTime = right.date ? new Date(right.date).getTime() : 0;
+      return rightTime - leftTime;
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        customer: safeCustomer(customer),
+        filters: {
+          shopId: shopId || "",
+          startDate: startDate ? startDate.toISOString() : "",
+          endDate: endDate ? endDate.toISOString() : "",
+        },
+        summary: {
+          sales: {
+            count: orders.length,
+            amount: salesAmount,
+          },
+          quotations: {
+            count: 0,
+            amount: 0,
+          },
+          returns: {
+            count: returns.length,
+            amount: returnAmount,
+          },
+          payments: {
+            count: paymentRows.length,
+            amount: paymentAmount,
+          },
+        },
+        activities,
+      },
+    });
+  } catch (e: any) {
+    return res.status(500).json({
+      success: false,
+      message: e?.message || "Server error",
+    });
+  }
+}
+
 export async function updateCustomer(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -436,6 +676,27 @@ export async function updateCustomer(req: Request, res: Response) {
       req.body?.mobile !== undefined ? normTrim(req.body?.mobile) : undefined;
     const email =
       req.body?.email !== undefined ? normLower(req.body?.email) : undefined;
+    const gstNumber =
+      req.body?.gstNumber !== undefined
+        ? normUpper(req.body?.gstNumber)
+        : undefined;
+    const state =
+      req.body?.state !== undefined ? normTrim(req.body?.state) : undefined;
+    const address =
+      req.body?.address !== undefined ? normTrim(req.body?.address) : undefined;
+    const openingBalance =
+      req.body?.openingBalance !== undefined
+        ? parseAmount(req.body?.openingBalance, 0)
+        : undefined;
+    const dueBalance =
+      req.body?.dueBalance !== undefined
+        ? parseAmount(req.body?.dueBalance, 0)
+        : undefined;
+    const points =
+      req.body?.points !== undefined
+        ? Math.max(0, Math.floor(parseAmount(req.body?.points, 0)))
+        : undefined;
+    const isWalkIn = parseBoolean(req.body?.isWalkIn);
     const isActive = parseBoolean(req.body?.isActive);
 
     const addresses = parseAddressesFromBody(req.body?.addresses);
@@ -481,6 +742,34 @@ export async function updateCustomer(req: Request, res: Response) {
 
     if (name !== undefined) {
       (customer as any).name = name;
+    }
+
+    if (gstNumber !== undefined) {
+      (customer as any).gstNumber = gstNumber;
+    }
+
+    if (state !== undefined) {
+      (customer as any).state = state;
+    }
+
+    if (address !== undefined) {
+      (customer as any).address = address;
+    }
+
+    if (openingBalance !== undefined) {
+      (customer as any).openingBalance = openingBalance;
+    }
+
+    if (dueBalance !== undefined) {
+      (customer as any).dueBalance = dueBalance;
+    }
+
+    if (points !== undefined) {
+      (customer as any).points = points;
+    }
+
+    if (isWalkIn !== undefined) {
+      (customer as any).isWalkIn = isWalkIn;
     }
 
     if (isActive !== undefined) {
@@ -609,6 +898,14 @@ export async function updateMyCustomerProfile(req: Request, res: Response) {
       req.body?.name !== undefined ? normTrim(req.body?.name) : undefined;
     const email =
       req.body?.email !== undefined ? normLower(req.body?.email) : undefined;
+    const gstNumber =
+      req.body?.gstNumber !== undefined
+        ? normUpper(req.body?.gstNumber)
+        : undefined;
+    const state =
+      req.body?.state !== undefined ? normTrim(req.body?.state) : undefined;
+    const address =
+      req.body?.address !== undefined ? normTrim(req.body?.address) : undefined;
 
     const addresses = parseAddressesFromBody(req.body?.addresses);
     if (addresses !== undefined) {
@@ -617,6 +914,18 @@ export async function updateMyCustomerProfile(req: Request, res: Response) {
 
     if (name !== undefined) {
       (customer as any).name = name;
+    }
+
+    if (gstNumber !== undefined) {
+      (customer as any).gstNumber = gstNumber;
+    }
+
+    if (state !== undefined) {
+      (customer as any).state = state;
+    }
+
+    if (address !== undefined) {
+      (customer as any).address = address;
     }
 
     if (email !== undefined && email !== customer.email) {

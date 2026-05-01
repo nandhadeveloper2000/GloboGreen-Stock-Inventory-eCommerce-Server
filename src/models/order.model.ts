@@ -13,16 +13,39 @@ export type OrderStatus = (typeof ORDER_STATUS)[number];
 export const ORDER_SOURCE = ["ONLINE", "DIRECT"] as const;
 export type OrderSource = (typeof ORDER_SOURCE)[number];
 
+export const ORDER_PAYMENT_METHODS = [
+  "COD",
+  "ONLINE",
+  "CASH",
+  "UPI",
+  "CARD",
+  "BANK_TRANSFER",
+  "CHEQUE",
+  "CREDIT",
+  "SPLIT",
+] as const;
+export type OrderPaymentMethod = (typeof ORDER_PAYMENT_METHODS)[number];
+
 const OrderItemSchema = new Schema(
   {
     productId: { type: Schema.Types.ObjectId, required: true, ref: "Product" },
+    shopProductId: { type: Schema.Types.ObjectId, ref: "ShopProduct", default: null },
     name: { type: String, required: true, trim: true },
     sku: { type: String, default: "", trim: true },
+    itemCode: { type: String, default: "", trim: true, uppercase: true },
+    batch: { type: String, default: "", trim: true },
+    unit: { type: String, default: "Pcs", trim: true },
+    mrp: { type: Number, default: 0, min: 0 },
     qty: { type: Number, required: true, min: 1 },
     price: { type: Number, required: true, min: 0 },
+    discountPercent: { type: Number, default: 0, min: 0, max: 100 },
+    discountAmount: { type: Number, default: 0, min: 0 },
+    taxPercent: { type: Number, default: 0, min: 0, max: 100 },
+    taxAmount: { type: Number, default: 0, min: 0 },
+    lineTotal: { type: Number, default: 0, min: 0 },
     imageUrl: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: true }
 );
 
 const AddressSnapshotSchema = new Schema(
@@ -42,10 +65,19 @@ const AddressSnapshotSchema = new Schema(
 
 const PaymentSchema = new Schema(
   {
-    method: { type: String, enum: ["COD", "ONLINE"], default: "COD" },
+    method: {
+      type: String,
+      enum: ORDER_PAYMENT_METHODS,
+      default: "COD",
+    },
     paid: { type: Boolean, default: false },
     provider: { type: String, default: "" },
     txnId: { type: String, default: "" },
+    receivedAmount: { type: Number, default: 0, min: 0 },
+    changeAmount: { type: Number, default: 0, min: 0 },
+    reference: { type: String, default: "", trim: true },
+    salesmanName: { type: String, default: "", trim: true },
+    notes: { type: String, default: "", trim: true },
   },
   { _id: false }
 );
@@ -63,10 +95,18 @@ const OrderSchema = new Schema(
 
     items: { type: [OrderItemSchema], required: true },
 
+    itemCount: { type: Number, default: 0, min: 0 },
+    totalQty: { type: Number, default: 0, min: 0 },
+
     subtotal: { type: Number, required: true, min: 0 },
+    taxAmount: { type: Number, default: 0, min: 0 },
     shippingFee: { type: Number, default: 0, min: 0 },
     discount: { type: Number, default: 0, min: 0 },
     grandTotal: { type: Number, required: true, min: 0 },
+
+    customerNameSnapshot: { type: String, default: "", trim: true },
+    customerMobileSnapshot: { type: String, default: "", trim: true },
+    invoiceNo: { type: String, default: "", trim: true, index: true },
 
     address: { type: AddressSnapshotSchema, required: true },
 

@@ -35,6 +35,49 @@ const CustomerSchema = new Schema(
       default: "",
     },
 
+    gstNumber: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+    },
+
+    state: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    address: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    openingBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    dueBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    points: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    isWalkIn: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
     avatarUrl: { type: String, default: "" },
     avatarPublicId: { type: String, default: "" },
 
@@ -72,6 +115,7 @@ CustomerSchema.index(
 );
 
 CustomerSchema.index({ isActive: 1 });
+CustomerSchema.index({ isWalkIn: 1, isActive: 1 });
 CustomerSchema.index({ createdAt: -1 });
 
 export type Customer = InferSchemaType<typeof CustomerSchema>;

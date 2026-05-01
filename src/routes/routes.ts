@@ -27,6 +27,7 @@ import invoiceRoutes from "./invoice.routes";
 import locationRoutes from "./location.routes";
 import purchaseRoutes from "./purchase.routes";
 import purchaseReturnRoutes from "./purchaseReturn.routes";
+import salesReturnRoutes from "./salesReturn.routes";
 
 const router = Router();
 
@@ -59,6 +60,7 @@ router.use("/products", productGlobalRoutes);
 router.use("/shop-products", shopProductRoutes);
 router.use("/purchase", purchaseRoutes);
 router.use("/purchase-returns", purchaseReturnRoutes);
+router.use("/sales-returns", salesReturnRoutes);
 /* ---------------- CUSTOMER ---------------- */
 router.use("/customer", customerRoutes);
 router.use("/customer/shops", customerShopRoutes);

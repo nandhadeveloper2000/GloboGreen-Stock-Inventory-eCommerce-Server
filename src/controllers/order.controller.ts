@@ -1,95 +1,271 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { OrderModel, ORDER_STATUS } from "../models/order.model";
+
+import { CustomerModel } from "../models/customer.model";
+import {
+  OrderModel,
+  ORDER_SOURCE,
+  ORDER_STATUS,
+} from "../models/order.model";
 import { createInvoiceFromOrderId } from "./invoice.controller";
 import { ensureAndDecrementShopStock } from "../utils/shopStock";
 
 const isObjectId = (id: any) => mongoose.Types.ObjectId.isValid(String(id));
-const normTrim = (v: any) => String(v ?? "").trim();
+const normTrim = (value: any) => String(value ?? "").trim();
+const normUpper = (value: any) => String(value ?? "").trim().toUpperCase();
 
 function safe(doc: any) {
   return doc?.toObject ? doc.toObject() : doc;
 }
 
-function calcTotals(items: any[], shippingFee = 0, discount = 0) {
-  const subtotal = items.reduce((sum, it) => sum + Number(it.price || 0) * Number(it.qty || 0), 0);
-  const grandTotal = Math.max(0, subtotal + Number(shippingFee || 0) - Number(discount || 0));
-  return { subtotal, grandTotal };
+function toNumber(value: unknown, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return number;
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function sanitizeAddressSnapshot(address: any = {}) {
+  return {
+    label: normTrim(address?.label),
+    name: normTrim(address?.name),
+    mobile: normTrim(address?.mobile),
+    state: normTrim(address?.state),
+    district: normTrim(address?.district),
+    taluk: normTrim(address?.taluk),
+    area: normTrim(address?.area),
+    street: normTrim(address?.street),
+    pincode: normTrim(address?.pincode),
+  };
+}
+
+function normalizeOrderItem(item: any) {
+  if (!item?.productId || !isObjectId(item.productId)) {
+    throw new Error("Invalid productId in items");
+  }
+
+  if (!item?.name || !normTrim(item.name)) {
+    throw new Error("Item name required");
+  }
+
+  const qty = Math.max(1, toNumber(item?.qty, 0));
+  const price = roundMoney(toNumber(item?.price, 0));
+  const mrp = roundMoney(toNumber(item?.mrp, 0));
+  const lineSubtotal = roundMoney(qty * price);
+  const discountPercent = Math.min(100, roundMoney(toNumber(item?.discountPercent, 0)));
+  const rawDiscountAmount = roundMoney(toNumber(item?.discountAmount, 0));
+  const derivedDiscountAmount = roundMoney((lineSubtotal * discountPercent) / 100);
+  const discountAmount = Math.min(
+    lineSubtotal,
+    rawDiscountAmount > 0 ? rawDiscountAmount : derivedDiscountAmount
+  );
+  const taxableValue = Math.max(lineSubtotal - discountAmount, 0);
+  const taxPercent = Math.min(100, roundMoney(toNumber(item?.taxPercent, 0)));
+  const rawTaxAmount = roundMoney(toNumber(item?.taxAmount, 0));
+  const derivedTaxAmount = roundMoney((taxableValue * taxPercent) / 100);
+  const taxAmount = rawTaxAmount > 0 ? rawTaxAmount : derivedTaxAmount;
+  const lineTotal = roundMoney(
+    toNumber(item?.lineTotal, taxableValue + taxAmount) || taxableValue + taxAmount
+  );
+
+  return {
+    productId: String(item.productId),
+    shopProductId: isObjectId(item?.shopProductId)
+      ? String(item.shopProductId)
+      : null,
+    name: normTrim(item.name),
+    sku: normTrim(item?.sku),
+    itemCode: normUpper(item?.itemCode),
+    batch: normTrim(item?.batch),
+    unit: normTrim(item?.unit) || "Pcs",
+    mrp,
+    qty,
+    price,
+    discountPercent,
+    discountAmount,
+    taxPercent,
+    taxAmount,
+    lineTotal,
+    imageUrl: normTrim(item?.imageUrl),
+  };
+}
+
+function prepareOrderItems(items: any[]) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("items required");
+  }
+
+  return items.map(normalizeOrderItem);
+}
+
+function calculateOrderTotals(items: any[], shippingFee = 0, discount = 0) {
+  const subtotal = roundMoney(
+    items.reduce(
+      (sum, item) => sum + roundMoney(Number(item.price || 0) * Number(item.qty || 0)),
+      0
+    )
+  );
+  const taxAmount = roundMoney(
+    items.reduce((sum, item) => sum + Number(item.taxAmount || 0), 0)
+  );
+  const itemDiscountAmount = roundMoney(
+    items.reduce((sum, item) => sum + Number(item.discountAmount || 0), 0)
+  );
+  const totalQty = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const grandTotal = roundMoney(
+    Math.max(
+      0,
+      subtotal - itemDiscountAmount + taxAmount + Number(shippingFee || 0) - Number(discount || 0)
+    )
+  );
+
+  return {
+    itemCount: items.length,
+    totalQty,
+    subtotal,
+    taxAmount,
+    discountAmount: itemDiscountAmount,
+    grandTotal,
+  };
+}
+
+function normalizePayment(payment: any, grandTotal: number) {
+  const method = normUpper(payment?.method || "COD");
+  const receivedAmount = roundMoney(
+    toNumber(
+      payment?.receivedAmount,
+      method === "CREDIT" ? 0 : grandTotal
+    )
+  );
+  const changeAmount = roundMoney(Math.max(receivedAmount - grandTotal, 0));
+  const outstandingAmount = roundMoney(
+    Math.max(grandTotal - Math.min(receivedAmount, grandTotal), 0)
+  );
+  const paid =
+    typeof payment?.paid === "boolean"
+      ? payment.paid
+      : outstandingAmount <= 0 && method !== "CREDIT";
+
+  return {
+    method,
+    paid,
+    provider: normTrim(payment?.provider),
+    txnId: normTrim(payment?.txnId),
+    receivedAmount,
+    changeAmount,
+    reference: normTrim(payment?.reference),
+    salesmanName: normTrim(payment?.salesmanName),
+    notes: normTrim(payment?.notes),
+    outstandingAmount,
+  };
+}
+
+function populateOrderQuery(query: any) {
+  return query
+    .populate("invoiceId")
+    .populate(
+      "customerId",
+      "name mobile email gstNumber state address openingBalance dueBalance points isWalkIn isActive"
+    )
+    .populate(
+      "shopId",
+      "name mobile email gstNumber shopAddress address shopOwnerAccountId shopType"
+    );
+}
+
+function handleStockError(res: Response, error: any) {
+  const msg = String(error?.message || "");
+
+  if (msg.startsWith("LOW_STOCK:")) {
+    const parts = msg.split(":");
+
+    return res.status(400).json({
+      success: false,
+      code: "LOW_STOCK",
+      productId: parts[1],
+      productName: parts[2],
+      message: `Stock not enough for ${parts[2]}`,
+      details: { need: parts[3], have: parts[4] },
+    });
+  }
+
+  return null;
 }
 
 /**
  * CUSTOMER: POST /api/orders  (ONLINE)
- * body: { shopId, items[], address, payment?, shippingFee?, discount?, notes?, tax? }
- * ✅ stock check + order + invoice in ONE transaction
+ * body: { shopId, items[], address, payment?, shippingFee?, discount?, notes? }
  */
 export async function createOrder(req: Request, res: Response) {
   const session = await mongoose.startSession();
+
   try {
-    const u = (req as any).user;
-    if (!u?.sub || u.role !== "CUSTOMER") {
+    const user = (req as any).user;
+
+    if (!user?.sub || user.role !== "CUSTOMER") {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const shopId = req.body?.shopId ?? null;
-    const items = req.body?.items ?? [];
+    const shopId = String(req.body?.shopId || "");
     const address = req.body?.address;
-    const payment = req.body?.payment ?? {};
-    const shippingFee = Number(req.body?.shippingFee ?? 0);
-    const discount = Number(req.body?.discount ?? 0);
+    const shippingFee = roundMoney(toNumber(req.body?.shippingFee, 0));
+    const discount = roundMoney(toNumber(req.body?.discount, 0));
     const notes = normTrim(req.body?.notes);
-    const tax = Number(req.body?.tax ?? 0);
 
     if (!shopId || !isObjectId(shopId)) {
-      return res.status(400).json({ success: false, message: "shopId required (invalid)" });
+      return res
+        .status(400)
+        .json({ success: false, message: "shopId required (invalid)" });
     }
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, message: "items required" });
-    }
     if (!address || typeof address !== "object") {
-      return res.status(400).json({ success: false, message: "address required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "address required" });
     }
 
-    for (const it of items) {
-      if (!it?.productId || !isObjectId(it.productId)) {
-        return res.status(400).json({ success: false, message: "Invalid productId in items" });
-      }
-      if (!it?.name || !normTrim(it.name)) {
-        return res.status(400).json({ success: false, message: "Item name required" });
-      }
-      if (!Number.isFinite(Number(it.qty)) || Number(it.qty) < 1) {
-        return res.status(400).json({ success: false, message: "Invalid qty" });
-      }
-      if (!Number.isFinite(Number(it.price)) || Number(it.price) < 0) {
-        return res.status(400).json({ success: false, message: "Invalid price" });
-      }
-    }
+    const preparedItems = prepareOrderItems(req.body?.items ?? []);
+    const totals = calculateOrderTotals(preparedItems, shippingFee, discount);
+    const payment = normalizePayment(req.body?.payment ?? {}, totals.grandTotal);
 
     let createdOrderId = "";
 
     await session.withTransaction(async () => {
-      // ✅ 1) stock decrement
+      const customer = await CustomerModel.findById(user.sub).session(session);
+
+      if (!customer) {
+        throw new Error("Customer not found");
+      }
+
       await ensureAndDecrementShopStock(
-        String(shopId),
-        items.map((it: any) => ({ productId: String(it.productId), qty: Number(it.qty) })),
+        shopId,
+        preparedItems.map((item) => ({
+          productId: String(item.productId),
+          qty: Number(item.qty),
+        })),
         session
       );
-
-      // ✅ 2) create order
-      const { subtotal, grandTotal } = calcTotals(items, shippingFee, discount);
 
       const created = await OrderModel.create(
         [
           {
-            customerId: u.sub,
+            customerId: user.sub,
             shopId,
             source: "ONLINE",
-            items,
-            subtotal,
+            items: preparedItems,
+            itemCount: totals.itemCount,
+            totalQty: totals.totalQty,
+            subtotal: totals.subtotal,
+            taxAmount: totals.taxAmount,
             shippingFee,
             discount,
-            grandTotal,
-            address,
+            grandTotal: totals.grandTotal,
+            customerNameSnapshot: normTrim((customer as any).name),
+            customerMobileSnapshot: normTrim((customer as any).mobile),
+            address: sanitizeAddressSnapshot(address),
             payment,
             notes,
             status: "PLACED",
@@ -100,26 +276,19 @@ export async function createOrder(req: Request, res: Response) {
 
       createdOrderId = String(created[0]._id);
 
-      // ✅ 3) create invoice + link invoiceId
-      await createInvoiceFromOrderId(createdOrderId, tax, session);
+      await createInvoiceFromOrderId(createdOrderId, totals.taxAmount, session);
     });
 
-    const fresh = await OrderModel.findById(createdOrderId).populate("invoiceId");
+    const fresh = await populateOrderQuery(OrderModel.findById(createdOrderId));
+
     return res.status(201).json({ success: true, data: safe(fresh) });
-  } catch (e: any) {
-    const msg = String(e?.message || "");
-    if (msg.startsWith("LOW_STOCK:")) {
-      const parts = msg.split(":");
-      return res.status(400).json({
-        success: false,
-        code: "LOW_STOCK",
-        productId: parts[1],
-        productName: parts[2],
-        message: `Stock not enough for ${parts[2]}`,
-        details: { need: parts[3], have: parts[4] },
-      });
-    }
-    return res.status(500).json({ success: false, message: e?.message || "Server error" });
+  } catch (error: any) {
+    const stockError = handleStockError(res, error);
+    if (stockError) return stockError;
+
+    return res
+      .status(500)
+      .json({ success: false, message: error?.message || "Server error" });
   } finally {
     await session.endSession();
   }
@@ -128,8 +297,9 @@ export async function createOrder(req: Request, res: Response) {
 /** CUSTOMER: GET /api/orders/my?page&limit */
 export async function listMyOrders(req: Request, res: Response) {
   try {
-    const u = (req as any).user;
-    if (!u?.sub || u.role !== "CUSTOMER") {
+    const user = (req as any).user;
+
+    if (!user?.sub || user.role !== "CUSTOMER") {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
@@ -138,12 +308,13 @@ export async function listMyOrders(req: Request, res: Response) {
     const skip = (page - 1) * limit;
 
     const [items, total] = await Promise.all([
-      OrderModel.find({ customerId: u.sub })
-        .populate("invoiceId")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      OrderModel.countDocuments({ customerId: u.sub }),
+      populateOrderQuery(
+        OrderModel.find({ customerId: user.sub })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+      ),
+      OrderModel.countDocuments({ customerId: user.sub }),
     ]);
 
     return res.json({
@@ -151,57 +322,104 @@ export async function listMyOrders(req: Request, res: Response) {
       data: items.map(safe),
       meta: { page, limit, total, pages: Math.ceil(total / limit) },
     });
-  } catch (e: any) {
-    return res.status(500).json({ success: false, message: e?.message || "Server error" });
+  } catch (error: any) {
+    return res
+      .status(500)
+      .json({ success: false, message: error?.message || "Server error" });
   }
 }
 
 export async function getOrder(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
 
-    const u = (req as any).user;
-    const order = await OrderModel.findById(id).populate("invoiceId");
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
 
-    if (u?.role === "CUSTOMER" && String((order as any).customerId) !== String(u.sub)) {
+    const user = (req as any).user;
+    const order = await populateOrderQuery(OrderModel.findById(id));
+
+    if (!order) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
+    }
+
+    if (
+      user?.role === "CUSTOMER" &&
+      String((order as any).customerId?._id || (order as any).customerId) !==
+        String(user.sub)
+    ) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
     return res.json({ success: true, data: safe(order) });
-  } catch (e: any) {
-    return res.status(500).json({ success: false, message: e?.message || "Server error" });
+  } catch (error: any) {
+    return res
+      .status(500)
+      .json({ success: false, message: error?.message || "Server error" });
   }
 }
 
 export async function listOrders(req: Request, res: Response) {
   try {
-    const { shopId, status, search } = req.query as any;
+    const { shopId, status, search, source } = req.query as any;
 
     const page = Math.max(1, Number(req.query?.page || 1));
     const limit = Math.min(200, Math.max(1, Number(req.query?.limit || 30)));
     const skip = (page - 1) * limit;
 
-    const q: any = {};
+    const query: any = {};
+
     if (shopId) {
-      if (!isObjectId(shopId)) return res.status(400).json({ success: false, message: "Invalid shopId" });
-      q.shopId = shopId;
+      if (!isObjectId(shopId)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid shopId" });
+      }
+
+      query.shopId = shopId;
     }
+
     if (status) {
       if (!ORDER_STATUS.includes(String(status) as any)) {
-        return res.status(400).json({ success: false, message: "Invalid status" });
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid status" });
       }
-      q.status = status;
+
+      query.status = status;
     }
+
+    if (source) {
+      const normalizedSource = normUpper(source);
+
+      if (!ORDER_SOURCE.includes(normalizedSource as any)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid source" });
+      }
+
+      query.source = normalizedSource;
+    }
+
     if (search) {
-      const s = String(search).trim();
-      q.$or = [{ orderNo: { $regex: s, $options: "i" } }];
+      const value = String(search).trim();
+
+      query.$or = [
+        { orderNo: { $regex: value, $options: "i" } },
+        { invoiceNo: { $regex: value, $options: "i" } },
+        { customerNameSnapshot: { $regex: value, $options: "i" } },
+        { customerMobileSnapshot: { $regex: value, $options: "i" } },
+      ];
     }
 
     const [items, total] = await Promise.all([
-      OrderModel.find(q).populate("invoiceId").sort({ createdAt: -1 }).skip(skip).limit(limit),
-      OrderModel.countDocuments(q),
+      populateOrderQuery(
+        OrderModel.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit)
+      ),
+      OrderModel.countDocuments(query),
     ]);
 
     return res.json({
@@ -209,30 +427,46 @@ export async function listOrders(req: Request, res: Response) {
       data: items.map(safe),
       meta: { page, limit, total, pages: Math.ceil(total / limit) },
     });
-  } catch (e: any) {
-    return res.status(500).json({ success: false, message: e?.message || "Server error" });
+  } catch (error: any) {
+    return res
+      .status(500)
+      .json({ success: false, message: error?.message || "Server error" });
   }
 }
 
 export async function cancelOrder(req: Request, res: Response) {
   try {
-    const u = (req as any).user;
-    if (!u?.sub || u.role !== "CUSTOMER") {
+    const user = (req as any).user;
+
+    if (!user?.sub || user.role !== "CUSTOMER") {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
     const { id } = req.params;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
+
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
 
     const order = await OrderModel.findById(id);
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    if (String((order as any).customerId) !== String(u.sub)) {
+    if (!order) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
+    }
+
+    if (String((order as any).customerId) !== String(user.sub)) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    if (["SHIPPED", "DELIVERED", "CANCELLED"].includes((order as any).status)) {
-      return res.status(400).json({ success: false, message: `Cannot cancel when status is ${(order as any).status}` });
+    if (
+      ["SHIPPED", "DELIVERED", "CANCELLED"].includes(String((order as any).status))
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel when status is ${(order as any).status}`,
+      });
     }
 
     (order as any).status = "CANCELLED";
@@ -240,9 +474,12 @@ export async function cancelOrder(req: Request, res: Response) {
     (order as any).cancelledAt = new Date();
 
     await order.save();
+
     return res.json({ success: true, data: safe(order) });
-  } catch (e: any) {
-    return res.status(500).json({ success: false, message: e?.message || "Server error" });
+  } catch (error: any) {
+    return res
+      .status(500)
+      .json({ success: false, message: error?.message || "Server error" });
   }
 }
 
@@ -251,22 +488,35 @@ export async function updateOrderStatus(req: Request, res: Response) {
     const { id } = req.params;
     const status = String(req.body?.status ?? "").trim();
 
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id" });
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+
     if (!ORDER_STATUS.includes(status as any)) {
-      return res.status(400).json({ success: false, message: "Invalid status" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid status" });
     }
 
     const order = await OrderModel.findById(id);
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+    if (!order) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
+    }
 
     (order as any).status = status as any;
-    if (status === "DELIVERED") (order as any).deliveredAt = new Date();
-    if (status !== "DELIVERED") (order as any).deliveredAt = null;
+    (order as any).deliveredAt = status === "DELIVERED" ? new Date() : null;
 
     await order.save();
-    const fresh = await OrderModel.findById(order._id).populate("invoiceId");
+
+    const fresh = await populateOrderQuery(OrderModel.findById(order._id));
+
     return res.json({ success: true, data: safe(fresh) });
-  } catch (e: any) {
-    return res.status(500).json({ success: false, message: e?.message || "Server error" });
+  } catch (error: any) {
+    return res
+      .status(500)
+      .json({ success: false, message: error?.message || "Server error" });
   }
 }
