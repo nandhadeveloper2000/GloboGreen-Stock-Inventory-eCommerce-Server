@@ -23,6 +23,10 @@ export function buildCreatedBy(user?: any) {
     MANAGER: "MANAGER",
     SUPERVISOR: "SUPERVISOR",
     STAFF: "STAFF",
+    SHOP_OWNER: "SHOP_OWNER",
+    SHOP_MANAGER: "SHOP_STAFF",
+    SHOP_SUPERVISOR: "SHOP_STAFF",
+    EMPLOYEE: "SHOP_STAFF",
   };
 
   return {
