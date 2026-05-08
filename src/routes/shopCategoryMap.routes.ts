@@ -82,6 +82,13 @@ router.patch(
   toggleShopCategoryMap
 );
 
+router.patch(
+  "/:id/toggle-status",
+  auth,
+  requireRoles(...UPDATE_ROLES),
+  toggleShopCategoryMap
+);
+
 router.delete(
   "/:id",
   auth,

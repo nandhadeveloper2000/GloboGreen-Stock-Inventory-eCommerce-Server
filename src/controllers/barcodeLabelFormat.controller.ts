@@ -146,7 +146,14 @@ export const createBarcodeLabelFormat = async (
       barcodeType: String(req.body.barcodeType || "CODE128"),
       fields: Array.isArray(req.body.fields)
         ? req.body.fields
-        : ["NAME", "BARCODE", "MRP"],
+        : [
+            "PRODUCT_IMAGE",
+            "NAME",
+            "BARCODE",
+            "MRP",
+            "PURCHASE_DATE",
+            "EXPIRY_DATE",
+          ],
       isUse: shouldUse,
     });
 

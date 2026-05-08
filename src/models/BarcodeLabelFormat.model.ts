@@ -3,10 +3,15 @@ import { Schema, model, models, type InferSchemaType, type Model } from "mongoos
 export const BARCODE_TYPES = ["CODE128", "QR"] as const;
 export const PAPER_SIZES = ["A4"] as const;
 export const LABEL_FIELDS = [
+  "PRODUCT_IMAGE",
   "NAME",
   "SKU",
   "BARCODE",
+  "SELLING_PRICE",
   "MRP",
+  "PURCHASE_DATE",
+  "EXPIRY_DATE",
+  "VENDOR_NAME",
   "CURRENCY",
   "SHOP_NAME",
 ] as const;
@@ -103,7 +108,14 @@ const BarcodeLabelFormatSchema = new Schema(
     fields: {
       type: [String],
       enum: LABEL_FIELDS,
-      default: ["NAME", "BARCODE", "MRP"],
+      default: [
+        "PRODUCT_IMAGE",
+        "NAME",
+        "BARCODE",
+        "MRP",
+        "PURCHASE_DATE",
+        "EXPIRY_DATE",
+      ],
     },
 
     isUse: {
