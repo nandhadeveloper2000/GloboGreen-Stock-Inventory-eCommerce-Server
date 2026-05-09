@@ -1,8 +1,9 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { OrderModel } from "../models/order.model";
-import PurchaseOrderModel from "../models/purchase.model";
+import { PurchaseOrderModel } from "../models/purchase.model";
 import ExpenseModel from "../models/expense.model";
+import { CustomerModel } from "../models/customer.model";
 
 type AuthUser = { sub?: string; id?: string; _id?: string; role?: string; shopOwnerAccountId?: string; ownerId?: string };
 type AuthedRequest = Request & { user?: AuthUser };
@@ -461,8 +462,6 @@ export async function getLoyaltyReport(req: AuthedRequest, res: Response) {
     if (!shopId || !isObjId(shopId)) {
       return res.status(400).json({ success: false, message: "Valid shopId required" });
     }
-
-    const { CustomerModel } = await import("../models/customer.model");
 
     const [topCustomers, pointsSummary] = await Promise.all([
       CustomerModel.find({ shopId: new mongoose.Types.ObjectId(shopId), isActive: true })
