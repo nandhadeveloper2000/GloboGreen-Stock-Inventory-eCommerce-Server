@@ -19,15 +19,18 @@ import { requireRole } from "../middlewares/requireRole";
 import { upload } from "../middlewares/upload";
 import {
   loginRateLimiter,
+  refreshRateLimiter,
   forgotPinRateLimiter,
   otpVerifyRateLimiter,
 } from "../middlewares/rateLimit.middleware";
+import { refreshAuthSession } from "../controllers/auth.controller";
 
 const router = Router();
 
 /* ---------- AUTH PUBLIC ---------- */
 router.post("/login", loginRateLimiter, masterLogin);
 router.post("/google-login", loginRateLimiter, masterGoogleLogin);
+router.post("/refresh", refreshRateLimiter, refreshAuthSession);
 router.post("/forgot-pin", forgotPinRateLimiter, masterForgotPin);
 router.post("/reset-pin", otpVerifyRateLimiter, masterResetPin);
 

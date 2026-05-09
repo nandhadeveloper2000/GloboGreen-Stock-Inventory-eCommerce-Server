@@ -495,6 +495,8 @@ export async function listShops(req: Request, res: Response) {
 
     const filter: any = {};
 
+    const scope = normTrim(req.query.scope);
+
     if (u.role === "SHOP_OWNER") {
       filter.shopOwnerAccountId = new mongoose.Types.ObjectId(u.sub);
     } else if (isShopStaffRole(u.role)) {
@@ -507,7 +509,24 @@ export async function listShops(req: Request, res: Response) {
         });
       }
 
-      filter._id = new mongoose.Types.ObjectId(shopId);
+      if (scope === "stock-transfer") {
+        const actorShop = await ShopModel.findById(shopId)
+          .select("shopOwnerAccountId")
+          .lean();
+
+        const ownerId = getEntityId((actorShop as any)?.shopOwnerAccountId);
+
+        if (!ownerId) {
+          return res.json({
+            success: true,
+            data: [],
+          });
+        }
+
+        filter.shopOwnerAccountId = new mongoose.Types.ObjectId(ownerId);
+      } else {
+        filter._id = new mongoose.Types.ObjectId(shopId);
+      }
     } else if (u.role === "CUSTOMER") {
       filter.isActive = true;
     }

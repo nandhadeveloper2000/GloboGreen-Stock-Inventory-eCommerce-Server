@@ -55,6 +55,13 @@ const StockTransferSchema = new Schema(
     transferDate: { type: Date, default: Date.now },
     notes: { type: String, default: "", trim: true },
     items: { type: [StockTransferItemSchema], default: [] },
+    transferType: {
+      type: String,
+      enum: ["FORWARD", "REVERSE"],
+      default: "FORWARD",
+      trim: true,
+      uppercase: true,
+    },
     status: {
       type: String,
       default: "COMPLETED",

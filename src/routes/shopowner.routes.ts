@@ -4,9 +4,11 @@ import { requireRoles } from "../middlewares/rbac.middleware";
 import { upload } from "../middlewares/upload";
 import {
   loginRateLimiter,
+  refreshRateLimiter,
   forgotPinRateLimiter,
   otpVerifyRateLimiter,
 } from "../middlewares/rateLimit.middleware";
+import { refreshAuthSession } from "../controllers/auth.controller";
 import {
   createShopOwner,
   listShopOwners,
@@ -38,6 +40,7 @@ const router = Router();
 
 /* ===================== PUBLIC AUTH ===================== */
 router.post("/login", loginRateLimiter, shopOwnerLogin);
+router.post("/refresh", refreshRateLimiter, refreshAuthSession);
 router.post("/forgot-pin", forgotPinRateLimiter, forgotShopOwnerPin);
 router.post("/verify-pin-otp", otpVerifyRateLimiter, verifyShopOwnerPinOtp);
 router.post("/reset-pin", otpVerifyRateLimiter, resetShopOwnerPin);

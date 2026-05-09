@@ -1787,3 +1787,74 @@ export async function deleteProduct(req: Request, res: Response) {
     });
   }
 }
+
+/** LIST PENDING APPROVALS */
+export async function listPendingApprovals(req: Request, res: Response) {
+  try {
+    const page = Math.max(Number(req.query?.page ?? 1), 1);
+    const limit = Math.min(Number(req.query?.limit ?? 20), 100);
+    const skip = (page - 1) * limit;
+    const q = String(req.query?.q ?? "").trim();
+
+    const filter: Record<string, unknown> = { approvalStatus: "PENDING" };
+    if (q) {
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      filter.$or = [{ name: rx }, { nameKey: rx }];
+    }
+
+    const [rows, total] = await Promise.all([
+      ProductModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      ProductModel.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({ success: true, count: rows.length, total, page, data: rows });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+}
+
+/** APPROVE PRODUCT */
+export async function approveProduct(req: Request, res: Response) {
+  try {
+    const id = getSingleParam(req.params.id);
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid product id" });
+    }
+
+    const doc = await ProductModel.findByIdAndUpdate(
+      id,
+      { $set: { approvalStatus: "APPROVED", isActiveGlobal: true } },
+      { new: true }
+    ).lean();
+
+    if (!doc) return res.status(404).json({ success: false, message: "Product not found" });
+
+    return res.status(200).json({ success: true, message: "Product approved", data: doc });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+}
+
+/** REJECT PRODUCT */
+export async function rejectProduct(req: Request, res: Response) {
+  try {
+    const id = getSingleParam(req.params.id);
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid product id" });
+    }
+
+    const reason = String((req.body as Record<string, unknown>)?.reason ?? "").trim();
+
+    const doc = await ProductModel.findByIdAndUpdate(
+      id,
+      { $set: { approvalStatus: "REJECTED", isActiveGlobal: false, rejectionReason: reason } },
+      { new: true }
+    ).lean();
+
+    if (!doc) return res.status(404).json({ success: false, message: "Product not found" });
+
+    return res.status(200).json({ success: true, message: "Product rejected", data: doc });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+}

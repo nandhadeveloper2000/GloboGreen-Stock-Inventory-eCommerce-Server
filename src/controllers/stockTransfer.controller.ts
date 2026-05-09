@@ -117,6 +117,75 @@ async function ensureShopAccess(req: Request, shopId: string) {
   return { ok: false as const, status: 403, message: "Access denied" };
 }
 
+async function ensureTransferDestinationAccess(
+  req: Request,
+  fromShop: any,
+  toShopId: string
+) {
+  if (!mongoose.Types.ObjectId.isValid(toShopId)) {
+    return { ok: false as const, status: 400, message: "Invalid shop id" };
+  }
+
+  const toShop = await ShopModel.findById(toShopId).select(
+    "_id shopOwnerAccountId shopType isActive name"
+  );
+
+  if (!toShop) {
+    return { ok: false as const, status: 404, message: "Shop not found" };
+  }
+
+  if ((toShop as any).isActive === false) {
+    return { ok: false as const, status: 403, message: "Shop is deactivated" };
+  }
+
+  const user = getAuthUser(req);
+
+  if (!user || !user.sub) {
+    return { ok: false as const, status: 401, message: "Unauthorized" };
+  }
+
+  if (isAdminRole(user.role)) {
+    return { ok: true as const, shop: toShop };
+  }
+
+  const fromOwnerId = String((fromShop as any)?.shopOwnerAccountId || "");
+  const toOwnerId = String((toShop as any)?.shopOwnerAccountId || "");
+
+  if (user.role === "SHOP_OWNER") {
+    if (fromOwnerId && fromOwnerId === String(user.sub) && toOwnerId === String(user.sub)) {
+      return { ok: true as const, shop: toShop };
+    }
+
+    return { ok: false as const, status: 403, message: "Access denied" };
+  }
+
+  if (isShopStaffRole(user.role)) {
+    const staff = await mongoose.model("ShopStaff").findById(user.sub).select(
+      "shopId isActive"
+    );
+
+    if (!staff || (staff as any).isActive === false) {
+      return { ok: false as const, status: 403, message: "Access denied" };
+    }
+
+    if (String((staff as any).shopId) !== String((fromShop as any)?._id || "")) {
+      return { ok: false as const, status: 403, message: "Access denied" };
+    }
+
+    if (!fromOwnerId || fromOwnerId !== toOwnerId) {
+      return {
+        ok: false as const,
+        status: 403,
+        message: "Destination shop must belong to the same shop owner",
+      };
+    }
+
+    return { ok: true as const, shop: toShop };
+  }
+
+  return { ok: false as const, status: 403, message: "Access denied" };
+}
+
 function buildStockTransferItem(source: any, qty: number) {
   return {
     productId: String(source.productId || ""),
@@ -161,7 +230,11 @@ export async function createStockTransfer(req: Request, res: Response) {
       return res.status(fromShopAccess.status).json({ success: false, message: fromShopAccess.message });
     }
 
-    const toShopAccess = await ensureShopAccess(req, toShopId);
+    const toShopAccess = await ensureTransferDestinationAccess(
+      req,
+      fromShopAccess.shop,
+      toShopId
+    );
     if (!toShopAccess.ok) {
       return res.status(toShopAccess.status).json({ success: false, message: toShopAccess.message });
     }
@@ -169,13 +242,20 @@ export async function createStockTransfer(req: Request, res: Response) {
     const fromShop = fromShopAccess.shop;
     const toShop = toShopAccess.shop;
 
-    if (normalizeUpper((fromShop as any).shopType) !== "WAREHOUSE_RETAIL_SHOP") {
-      return res.status(403).json({ success: false, message: "Transfer source must be a Warehouse Retail Shop" });
+    const fromShopType = normalizeUpper((fromShop as any).shopType);
+    const toShopType = normalizeUpper((toShop as any).shopType);
+
+    const isForward = fromShopType === "WAREHOUSE_RETAIL_SHOP" && toShopType === "RETAIL_BRANCH_SHOP";
+    const isReverse = fromShopType === "RETAIL_BRANCH_SHOP" && toShopType === "WAREHOUSE_RETAIL_SHOP";
+
+    if (!isForward && !isReverse) {
+      return res.status(403).json({
+        success: false,
+        message: "Transfer must be between a Warehouse Retail Shop and a Retail Branch Shop",
+      });
     }
 
-    if (normalizeUpper((toShop as any).shopType) !== "RETAIL_BRANCH_SHOP") {
-      return res.status(403).json({ success: false, message: "Transfer destination must be a Retail Branch Shop" });
-    }
+    const transferType = isForward ? "FORWARD" : "REVERSE";
 
     const validItems = items
       .map((item: any) => ({ productId: String(item.productId || ""), qty: parseNumber(item.qty) }))
@@ -268,6 +348,7 @@ export async function createStockTransfer(req: Request, res: Response) {
             referenceNo,
             notes,
             transferDate,
+            transferType,
             items: transferItems,
             status: "COMPLETED",
             createdBy: new mongoose.Types.ObjectId(getUserId(req)),

@@ -1,25 +1,7 @@
 import { Schema, model, models, type InferSchemaType, type Model } from "mongoose";
 
-export const PARTY_TYPES = [
-  "SUPPLIER",
-  "DEALER",
-  "WHOLESALER",
-  "CUSTOMER",
-] as const;
-
-export const BALANCE_TYPES = ["RECEIVABLE", "PAYABLE", "NONE"] as const;
-
-const AddressSchema = new Schema(
-  {
-    state: { type: String, default: "", trim: true },
-    district: { type: String, default: "", trim: true },
-    taluk: { type: String, default: "", trim: true },
-    area: { type: String, default: "", trim: true },
-    street: { type: String, default: "", trim: true },
-    pincode: { type: String, default: "", trim: true },
-  },
-  { _id: false }
-);
+export const PARTY_TYPE = ["VENDOR", "CUSTOMER", "OTHER"] as const;
+export const PAYMENT_MODE = ["CASH", "UPI", "CARD", "BANK_TRANSFER", "CHEQUE", "CREDIT"] as const;
 
 const PartyAccountSchema = new Schema(
   {
@@ -29,23 +11,31 @@ const PartyAccountSchema = new Schema(
       required: true,
       index: true,
     },
-
     shopId: {
       type: Schema.Types.ObjectId,
       ref: "Shop",
-      default: null,
+      required: true,
       index: true,
     },
 
     partyType: {
       type: String,
-      enum: PARTY_TYPES,
+      enum: PARTY_TYPE,
       required: true,
       index: true,
-      trim: true,
     },
 
-    partyName: {
+    refId: {
+      type: Schema.Types.ObjectId,
+      default: null,
+    },
+    refModel: {
+      type: String,
+      enum: ["Vendor", "Customer", null],
+      default: null,
+    },
+
+    name: {
       type: String,
       required: true,
       trim: true,
@@ -57,49 +47,32 @@ const PartyAccountSchema = new Schema(
       trim: true,
     },
 
-    email: {
-      type: String,
-      default: "",
-      trim: true,
-      lowercase: true,
-    },
-
-    gstNumber: {
-      type: String,
-      default: "",
-      trim: true,
-      uppercase: true,
-    },
-
-    billingAddress: {
-      type: AddressSchema,
-      default: () => ({}),
-    },
-
     openingBalance: {
       type: Number,
       default: 0,
-      min: 0,
+    },
+
+    openingBalanceType: {
+      type: String,
+      enum: ["DR", "CR"],
+      default: "DR",
     },
 
     currentBalance: {
       type: Number,
       default: 0,
-      min: 0,
     },
 
     balanceType: {
       type: String,
-      enum: BALANCE_TYPES,
-      default: "NONE",
-      index: true,
-      trim: true,
+      enum: ["DR", "CR"],
+      default: "DR",
     },
 
-    creditLimit: {
-      type: Number,
-      default: 0,
-      min: 0,
+    notes: {
+      type: String,
+      default: "",
+      trim: true,
     },
 
     isActive: {
@@ -116,9 +89,8 @@ const PartyAccountSchema = new Schema(
   { timestamps: true, versionKey: false }
 );
 
-PartyAccountSchema.index({ shopOwnerAccountId: 1, partyType: 1, isActive: 1 });
-PartyAccountSchema.index({ shopOwnerAccountId: 1, mobile: 1 });
-PartyAccountSchema.index({ shopOwnerAccountId: 1, partyName: 1 });
+PartyAccountSchema.index({ shopOwnerAccountId: 1, shopId: 1, partyType: 1, isActive: 1 });
+PartyAccountSchema.index({ shopId: 1, name: 1 });
 
 export type PartyAccount = InferSchemaType<typeof PartyAccountSchema>;
 
