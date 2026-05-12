@@ -1,113 +1,177 @@
-import type { Request, Response } from "express";
+import { Request, Response } from "express";
 import mongoose from "mongoose";
+
 import { ProductTypeModel } from "../models/productType.model";
-import { uploadImage } from "../utils/uploadImage";
-import { deleteImage } from "../utils/deleteImage";
+import { SubCategoryModel } from "../models/subcategory.model";
+import { CategoryModel } from "../models/category.model";
 
-const norm = (v: unknown) => String(v ?? "").trim();
-const keyOf = (v: unknown) => norm(v).toLowerCase();
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+type AuthRole = "MASTER_ADMIN" | "MANAGER" | "SUPERVISOR" | "STAFF";
 
-function getCreatedBy(req: Request) {
-  const user = (req as Request & { user?: any }).user;
+type AuthUser = {
+  sub?: string;
+  role?: AuthRole;
+};
 
-  if (!user) {
-    return { type: "UNKNOWN", id: null, role: "UNKNOWN" };
+const isObjectId = (id: unknown): boolean =>
+  mongoose.Types.ObjectId.isValid(String(id));
+
+const norm = (value: unknown): string => String(value ?? "").trim();
+
+const keyOf = (value: unknown): string =>
+  norm(value)
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const escapeRegex = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const productTypePopulate = {
+  path: "subCategoryId",
+  select: "name nameKey isActive categoryId",
+  populate: {
+    path: "categoryId",
+    select: "name nameKey isActive",
+  },
+};
+
+function getAuthUser(req: Request): AuthUser | undefined {
+  return (req as any).user as AuthUser | undefined;
+}
+
+function buildCreatedBy(user?: AuthUser) {
+  if (!user?.sub || !user?.role) {
+    return {
+      type: "SYSTEM",
+      id: null,
+      role: "STAFF",
+    };
+  }
+
+  switch (user.role) {
+    case "MASTER_ADMIN":
+      return { type: "MASTER", id: user.sub, role: user.role };
+    case "MANAGER":
+      return { type: "MANAGER", id: user.sub, role: user.role };
+    case "SUPERVISOR":
+      return { type: "SUPERVISOR", id: user.sub, role: user.role };
+    case "STAFF":
+      return { type: "STAFF", id: user.sub, role: user.role };
+    default:
+      return {
+        type: "SYSTEM",
+        id: null,
+        role: "STAFF",
+      };
+  }
+}
+
+function validateName(name: string) {
+  if (!name) return "name is required";
+  if (name.length < 2) return "Product Type name must be at least 2 characters";
+  if (name.length > 80) return "Product Type name must be 80 characters or less";
+  return "";
+}
+
+async function ensureSubCategoryExists(subCategoryId: string) {
+  const subCategory = await SubCategoryModel.findById(subCategoryId).lean();
+
+  if (!subCategory) {
+    return {
+      ok: false as const,
+      status: 404,
+      message: "SubCategory not found",
+    };
   }
 
   return {
-    type: user.userType || user.type || "UNKNOWN",
-    id: user._id || user.id || null,
-    role: user.role || "UNKNOWN",
+    ok: true as const,
+    status: 200,
+    message: "",
   };
 }
 
-/* =========================
-   CREATE
-========================= */
 export async function createProductType(req: Request, res: Response) {
   try {
     const subCategoryId = norm(req.body?.subCategoryId);
     const name = norm(req.body?.name);
+    const nameError = validateName(name);
 
     if (!subCategoryId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "subCategoryId is required" });
+      return res.status(400).json({
+        success: false,
+        message: "subCategoryId is required",
+      });
     }
 
     if (!isObjectId(subCategoryId)) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid subCategoryId" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid subCategoryId",
+      });
     }
 
-    if (!name) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Name is required" });
+    if (nameError) {
+      return res.status(400).json({
+        success: false,
+        message: nameError,
+      });
+    }
+
+    const subCategoryCheck = await ensureSubCategoryExists(subCategoryId);
+
+    if (!subCategoryCheck.ok) {
+      return res.status(subCategoryCheck.status).json({
+        success: false,
+        message: subCategoryCheck.message,
+      });
     }
 
     const nameKey = keyOf(name);
 
-    const exists = await ProductTypeModel.findOne({ subCategoryId, nameKey });
+    const exists = await ProductTypeModel.findOne({
+      subCategoryId,
+      nameKey,
+    }).lean();
+
     if (exists) {
       return res.status(409).json({
         success: false,
-        message: "Product type already exists in this subcategory",
+        message: "Product Type already exists under this Sub Category",
       });
     }
 
-    let image = { url: "", publicId: "" };
-
-    if (req.file) {
-      const uploaded = await uploadImage(
-        req.file,
-        "catalog/product-types"
-      );
-      image = {
-        url: uploaded.url,
-        publicId: uploaded.publicId,
-      };
-    }
-
-    const row = await ProductTypeModel.create({
+    const doc = await ProductTypeModel.create({
       subCategoryId,
       name,
       nameKey,
-      image,
       isActive: true,
-      createdBy: getCreatedBy(req),
+      createdBy: buildCreatedBy(getAuthUser(req)),
     });
 
-    const data = await ProductTypeModel.findById(row._id).populate(
-      "subCategoryId",
-      "name nameKey image isActive"
+    const populated = await ProductTypeModel.findById(doc._id).populate(
+      productTypePopulate
     );
 
     return res.status(201).json({
       success: true,
-      message: "Product type created successfully",
-      data,
+      message: "Product Type created successfully",
+      data: populated,
     });
   } catch (error: any) {
     if (error?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Duplicate product type",
+        message: "Product Type already exists under this Sub Category",
       });
     }
 
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to create product type",
+      message: error?.message || "Failed to create Product Type",
     });
   }
 }
 
-/* =========================
-   LIST
-========================= */
 export async function listProductTypes(req: Request, res: Response) {
   try {
     const q = norm(req.query?.q);
@@ -116,16 +180,14 @@ export async function listProductTypes(req: Request, res: Response) {
 
     const filter: Record<string, any> = {};
 
-    if (q) {
-      filter.nameKey = { $regex: keyOf(q), $options: "i" };
-    }
-
     if (subCategoryId) {
       if (!isObjectId(subCategoryId)) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid subCategoryId" });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid subCategoryId",
+        });
       }
+
       filter.subCategoryId = subCategoryId;
     }
 
@@ -133,9 +195,45 @@ export async function listProductTypes(req: Request, res: Response) {
       filter.isActive = String(isActive) === "true";
     }
 
+    if (q) {
+      const regex = new RegExp(escapeRegex(keyOf(q)), "i");
+
+      const categoryMatches = await CategoryModel.find(
+        {
+          $or: [{ name: regex }, { nameKey: regex }],
+        },
+        { _id: 1 }
+      ).lean();
+
+      const subCategoryMatches = await SubCategoryModel.find(
+        {
+          $or: [
+            { name: regex },
+            { nameKey: regex },
+            ...(categoryMatches.length > 0
+              ? [{ categoryId: { $in: categoryMatches.map((item) => item._id) } }]
+              : []),
+          ],
+        },
+        { _id: 1 }
+      ).lean();
+
+      const orFilters: Record<string, any>[] = [{ name: regex }, { nameKey: regex }];
+
+      if (subCategoryMatches.length > 0) {
+        orFilters.push({
+          subCategoryId: {
+            $in: subCategoryMatches.map((item) => item._id),
+          },
+        });
+      }
+
+      filter.$or = orFilters;
+    }
+
     const rows = await ProductTypeModel.find(filter)
-      .populate("subCategoryId", "name nameKey image isActive")
-      .sort({ nameKey: 1 })
+      .populate(productTypePopulate)
+      .sort({ updatedAt: -1, createdAt: -1, nameKey: 1 })
       .limit(500);
 
     return res.json({
@@ -145,75 +243,76 @@ export async function listProductTypes(req: Request, res: Response) {
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to fetch product types",
+      message: error?.message || "Failed to fetch Product Types",
     });
   }
 }
 
-/* =========================
-   GET ONE
-========================= */
 export async function getProductType(req: Request, res: Response) {
   try {
-    const id = norm(req.params?.id);
+    const id = String(req.params?.id ?? "");
 
     if (!isObjectId(id)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid product type id",
+        message: "Invalid id",
       });
     }
 
-    const row = await ProductTypeModel.findById(id).populate(
-      "subCategoryId",
-      "name nameKey image isActive"
-    );
+    const doc = await ProductTypeModel.findById(id).populate(productTypePopulate);
 
-    if (!row) {
+    if (!doc) {
       return res.status(404).json({
         success: false,
-        message: "Product type not found",
+        message: "Product Type not found",
       });
     }
 
     return res.json({
       success: true,
-      data: row,
+      data: doc,
     });
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to fetch product type",
+      message: error?.message || "Failed to fetch Product Type",
     });
   }
 }
 
-/* =========================
-   UPDATE
-========================= */
 export async function updateProductType(req: Request, res: Response) {
   try {
-    const id = norm(req.params?.id);
+    const id = String(req.params?.id ?? "");
+    const subCategoryId = norm(req.body?.subCategoryId);
+    const name = norm(req.body?.name);
 
     if (!isObjectId(id)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid product type id",
+        message: "Invalid id",
       });
     }
 
-    const row = await ProductTypeModel.findById(id);
-    if (!row) {
+    const current = await ProductTypeModel.findById(id);
+
+    if (!current) {
       return res.status(404).json({
         success: false,
-        message: "Product type not found",
+        message: "Product Type not found",
       });
     }
 
-    const nextSubCategoryId =
-      norm(req.body?.subCategoryId) || String(row.subCategoryId);
-    const nextName = norm(req.body?.name) || row.name;
-    const nextNameKey = keyOf(nextName);
+    const updateData: Record<string, any> = {};
+    const nextSubCategoryId = subCategoryId || String(current.subCategoryId || "");
+    const nextName = name || current.name;
+    const nameError = validateName(nextName);
+
+    if (!nextSubCategoryId) {
+      return res.status(400).json({
+        success: false,
+        message: "subCategoryId is required",
+      });
+    }
 
     if (!isObjectId(nextSubCategoryId)) {
       return res.status(400).json({
@@ -222,237 +321,155 @@ export async function updateProductType(req: Request, res: Response) {
       });
     }
 
+    if (nameError) {
+      return res.status(400).json({
+        success: false,
+        message: nameError,
+      });
+    }
+
+    const subCategoryCheck = await ensureSubCategoryExists(nextSubCategoryId);
+
+    if (!subCategoryCheck.ok) {
+      return res.status(subCategoryCheck.status).json({
+        success: false,
+        message: subCategoryCheck.message,
+      });
+    }
+
+    const nextNameKey = keyOf(nextName);
+
     const duplicate = await ProductTypeModel.findOne({
-      _id: { $ne: row._id },
+      _id: { $ne: id },
       subCategoryId: nextSubCategoryId,
       nameKey: nextNameKey,
-    });
+    }).lean();
 
     if (duplicate) {
       return res.status(409).json({
         success: false,
-        message: "Product type already exists in this subcategory",
+        message: "Product Type already exists under this Sub Category",
       });
     }
 
-    row.subCategoryId = new mongoose.Types.ObjectId(nextSubCategoryId);
-    row.name = nextName;
-    row.nameKey = nextNameKey;
+    if (subCategoryId) {
+      updateData.subCategoryId = nextSubCategoryId;
+    }
 
-    await row.save();
+    if (name) {
+      updateData.name = nextName;
+      updateData.nameKey = nextNameKey;
+    }
 
-    const data = await ProductTypeModel.findById(row._id).populate(
-      "subCategoryId",
-      "name nameKey image isActive"
-    );
+    if (!name && current.nameKey !== nextNameKey) {
+      updateData.nameKey = nextNameKey;
+    }
+
+    const updated = await ProductTypeModel.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    ).populate(productTypePopulate);
 
     return res.json({
       success: true,
-      message: "Product type updated successfully",
-      data,
+      message: "Product Type updated successfully",
+      data: updated,
     });
   } catch (error: any) {
     if (error?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Duplicate product type",
+        message: "Product Type already exists under this Sub Category",
       });
     }
 
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to update product type",
+      message: error?.message || "Failed to update Product Type",
     });
   }
 }
 
-/* =========================
-   TOGGLE ACTIVE
-========================= */
-export async function toggleProductTypeActive(req: Request, res: Response) {
-  try {
-    const id = norm(req.params?.id);
-
-    if (!isObjectId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid product type id",
-      });
-    }
-
-    const row = await ProductTypeModel.findById(id);
-    if (!row) {
-      return res.status(404).json({
-        success: false,
-        message: "Product type not found",
-      });
-    }
-
-    row.isActive = !row.isActive;
-    await row.save();
-
-    return res.json({
-      success: true,
-      message: `Product type ${row.isActive ? "activated" : "deactivated"} successfully`,
-      data: row,
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      message: error?.message || "Failed to update status",
-    });
-  }
-}
-
-/* =========================
-   UPDATE IMAGE
-========================= */
-export async function updateProductTypeImage(req: Request, res: Response) {
-  try {
-    const id = norm(req.params?.id);
-
-    if (!isObjectId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid product type id",
-      });
-    }
-
-    const row = await ProductTypeModel.findById(id);
-    if (!row) {
-      return res.status(404).json({
-        success: false,
-        message: "Product type not found",
-      });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: "Image file is required",
-      });
-    }
-
-    const oldPublicId = row.image?.publicId;
-
-    const uploaded = await uploadImage(req.file, "catalog/product-types");
-
-    row.image = {
-      url: uploaded.url,
-      publicId: uploaded.publicId,
-    };
-
-    await row.save();
-
-    if (oldPublicId) {
-      await deleteImage(oldPublicId);
-    }
-
-    const data = await ProductTypeModel.findById(row._id).populate(
-      "subCategoryId",
-      "name nameKey image isActive"
-    );
-
-    return res.json({
-      success: true,
-      message: "Product type image updated successfully",
-      data,
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      message: error?.message || "Failed to update image",
-    });
-  }
-}
-
-/* =========================
-   REMOVE IMAGE
-========================= */
-export async function removeProductTypeImage(req: Request, res: Response) {
-  try {
-    const id = norm(req.params?.id);
-
-    if (!isObjectId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid product type id",
-      });
-    }
-
-    const row = await ProductTypeModel.findById(id);
-    if (!row) {
-      return res.status(404).json({
-        success: false,
-        message: "Product type not found",
-      });
-    }
-
-    const oldPublicId = row.image?.publicId;
-
-    row.image = {
-      url: "",
-      publicId: "",
-    };
-
-    await row.save();
-
-    if (oldPublicId) {
-      await deleteImage(oldPublicId);
-    }
-
-    return res.json({
-      success: true,
-      message: "Product type image removed successfully",
-      data: row,
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      message: error?.message || "Failed to remove image",
-    });
-  }
-}
-
-/* =========================
-   DELETE
-========================= */
 export async function deleteProductType(req: Request, res: Response) {
   try {
-    const id = norm(req.params?.id);
+    const id = String(req.params?.id ?? "");
 
     if (!isObjectId(id)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid product type id",
+        message: "Invalid id",
       });
     }
 
-    const row = await ProductTypeModel.findById(id);
+    const current = await ProductTypeModel.findById(id);
 
-    if (!row) {
+    if (!current) {
       return res.status(404).json({
         success: false,
-        message: "Product type not found",
+        message: "Product Type not found",
       });
     }
-
-    const oldPublicId = row.image?.publicId;
 
     await ProductTypeModel.findByIdAndDelete(id);
 
-    if (oldPublicId) {
-      await deleteImage(oldPublicId);
-    }
-
     return res.json({
       success: true,
-      message: "Product type deleted successfully",
+      message: "Product Type deleted successfully",
     });
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to delete product type",
+      message: error?.message || "Failed to delete Product Type",
+    });
+  }
+}
+
+export async function toggleProductTypeActive(req: Request, res: Response) {
+  try {
+    const id = String(req.params?.id ?? "");
+
+    if (!isObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid id",
+      });
+    }
+
+    if (typeof req.body?.isActive === "undefined") {
+      return res.status(400).json({
+        success: false,
+        message: "isActive is required",
+      });
+    }
+
+    const isActive =
+      req.body.isActive === true || String(req.body.isActive) === "true";
+
+    const updated = await ProductTypeModel.findByIdAndUpdate(
+      id,
+      { $set: { isActive } },
+      { new: true, runValidators: true }
+    ).populate(productTypePopulate);
+
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        message: "Product Type not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Product Type ${
+        isActive ? "activated" : "deactivated"
+      } successfully`,
+      data: updated,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to update Product Type status",
     });
   }
 }

@@ -10,13 +10,6 @@ import { CreatedBySchema } from "./shared/createdBy.schema";
 
 const CategorySchema = new Schema(
   {
-    masterCategoryId: {
-      type: Schema.Types.ObjectId,
-      ref: "MasterCategory",
-      required: true,
-      index: true,
-    },
-
     name: {
       type: String,
       required: true,
@@ -50,7 +43,7 @@ const CategorySchema = new Schema(
   }
 );
 
-CategorySchema.index({ masterCategoryId: 1, nameKey: 1 }, { unique: true });
+CategorySchema.index({ nameKey: 1 }, { unique: true });
 
 export type Category = InferSchemaType<typeof CategorySchema>;
 export type CategoryDocument = HydratedDocument<Category>;

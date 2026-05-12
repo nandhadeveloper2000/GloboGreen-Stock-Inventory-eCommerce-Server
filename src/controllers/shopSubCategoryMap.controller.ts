@@ -20,11 +20,7 @@ function buildShopSubCategoryMapQuery(query: any) {
       select: "name image categoryId isActive",
       populate: {
         path: "categoryId",
-        select: "name image masterCategoryId isActive",
-        populate: {
-          path: "masterCategoryId",
-          select: "name image isActive",
-        },
+        select: "name image isActive",
       },
     });
 }
@@ -351,7 +347,6 @@ export async function listShopSubCategoryMaps(req: Request, res: Response) {
             row.shopId?.shopType,
             row.subCategoryId?.name,
             row.subCategoryId?.categoryId?.name,
-            row.subCategoryId?.categoryId?.masterCategoryId?.name,
           ],
           search
         )
@@ -471,7 +466,6 @@ export async function listShopSubCategoriesByShop(
           [
             row.subCategoryId?.name,
             row.subCategoryId?.categoryId?.name,
-            row.subCategoryId?.categoryId?.masterCategoryId?.name,
           ],
           search
         )

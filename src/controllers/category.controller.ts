@@ -2,7 +2,6 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 
 import { CategoryModel } from "../models/category.model";
-import { MasterCategoryModel } from "../models/masterCategory.model";
 import { SubCategoryModel } from "../models/subcategory.model";
 
 import { uploadImage } from "../utils/uploadImage";
@@ -105,22 +104,7 @@ async function removeImageAndDeleteOld(
 /* ========================================================================== */
 export async function createCategory(req: Request, res: Response) {
   try {
-    const masterCategoryId = norm(req.body?.masterCategoryId);
     const name = norm(req.body?.name);
-
-    if (!masterCategoryId) {
-      return res.status(400).json({
-        success: false,
-        message: "masterCategoryId is required",
-      });
-    }
-
-    if (!isObjectId(masterCategoryId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid masterCategoryId",
-      });
-    }
 
     if (!name) {
       return res.status(400).json({
@@ -129,28 +113,16 @@ export async function createCategory(req: Request, res: Response) {
       });
     }
 
-    const masterCategory = await MasterCategoryModel.findById(
-      masterCategoryId
-    ).lean();
-
-    if (!masterCategory) {
-      return res.status(404).json({
-        success: false,
-        message: "MasterCategory not found",
-      });
-    }
-
     const nameKey = keyOf(name);
 
     const exists = await CategoryModel.findOne({
-      masterCategoryId,
       nameKey,
     }).lean();
 
     if (exists) {
       return res.status(409).json({
         success: false,
-        message: "Category already exists under this MasterCategory",
+        message: "Category already exists",
       });
     }
 
@@ -160,7 +132,6 @@ export async function createCategory(req: Request, res: Response) {
       : EMPTY_IMAGE;
 
     const doc = await CategoryModel.create({
-      masterCategoryId,
       name,
       nameKey,
       image: {
@@ -171,21 +142,16 @@ export async function createCategory(req: Request, res: Response) {
       createdBy: buildCreatedBy(getAuthUser(req)),
     });
 
-    const populated = await CategoryModel.findById(doc._id).populate(
-      "masterCategoryId",
-      "name nameKey image isActive"
-    );
-
     return res.status(201).json({
       success: true,
       message: "Category created successfully",
-      data: populated,
+      data: doc,
     });
   } catch (error: any) {
     if (error?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Category already exists under this MasterCategory",
+        message: "Category already exists",
       });
     }
 
@@ -202,7 +168,6 @@ export async function createCategory(req: Request, res: Response) {
 export async function listCategories(req: Request, res: Response) {
   try {
     const q = norm(req.query?.q);
-    const masterCategoryId = norm(req.query?.masterCategoryId);
     const isActive = req.query?.isActive;
 
     const filter: Record<string, any> = {};
@@ -214,25 +179,11 @@ export async function listCategories(req: Request, res: Response) {
       ];
     }
 
-    if (masterCategoryId) {
-      if (!isObjectId(masterCategoryId)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid masterCategoryId",
-        });
-      }
-
-      filter.masterCategoryId = masterCategoryId;
-    }
-
     if (typeof isActive !== "undefined") {
       filter.isActive = String(isActive) === "true";
     }
 
-    const rows = await CategoryModel.find(filter)
-      .populate("masterCategoryId", "name nameKey image isActive")
-      .sort({ nameKey: 1 })
-      .limit(500);
+    const rows = await CategoryModel.find(filter).sort({ nameKey: 1 }).limit(500);
 
     return res.json({
       success: true,
@@ -260,10 +211,7 @@ export async function getCategory(req: Request, res: Response) {
       });
     }
 
-    const doc = await CategoryModel.findById(id).populate(
-      "masterCategoryId",
-      "name nameKey image isActive"
-    );
+    const doc = await CategoryModel.findById(id);
 
     if (!doc) {
       return res.status(404).json({
@@ -290,7 +238,6 @@ export async function getCategory(req: Request, res: Response) {
 export async function updateCategory(req: Request, res: Response) {
   try {
     const id = String(req.params?.id ?? "");
-    const masterCategoryId = norm(req.body?.masterCategoryId);
     const name = norm(req.body?.name);
 
     if (!isObjectId(id)) {
@@ -310,32 +257,8 @@ export async function updateCategory(req: Request, res: Response) {
 
     const updateData: Record<string, any> = {};
 
-    const nextMasterCategoryId =
-      masterCategoryId || String(current.masterCategoryId);
     const nextName = name || current.name;
     const nextNameKey = keyOf(nextName);
-
-    if (masterCategoryId) {
-      if (!isObjectId(masterCategoryId)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid masterCategoryId",
-        });
-      }
-
-      const masterCategory = await MasterCategoryModel.findById(
-        masterCategoryId
-      ).lean();
-
-      if (!masterCategory) {
-        return res.status(404).json({
-          success: false,
-          message: "MasterCategory not found",
-        });
-      }
-
-      updateData.masterCategoryId = masterCategoryId;
-    }
 
     if (name) {
       updateData.name = name;
@@ -344,14 +267,13 @@ export async function updateCategory(req: Request, res: Response) {
 
     const duplicate = await CategoryModel.findOne({
       _id: { $ne: id },
-      masterCategoryId: nextMasterCategoryId,
       nameKey: nextNameKey,
     }).lean();
 
     if (duplicate) {
       return res.status(409).json({
         success: false,
-        message: "Category already exists under this MasterCategory",
+        message: "Category already exists",
       });
     }
 
@@ -359,7 +281,7 @@ export async function updateCategory(req: Request, res: Response) {
       id,
       { $set: updateData },
       { new: true, runValidators: true }
-    ).populate("masterCategoryId", "name nameKey image isActive");
+    );
 
     return res.json({
       success: true,
@@ -370,7 +292,7 @@ export async function updateCategory(req: Request, res: Response) {
     if (error?.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Category already exists under this MasterCategory",
+        message: "Category already exists",
       });
     }
 
@@ -462,7 +384,7 @@ export async function toggleCategoryActive(req: Request, res: Response) {
       id,
       { $set: { isActive } },
       { new: true, runValidators: true }
-    ).populate("masterCategoryId", "name nameKey image isActive");
+    );
 
     if (!updated) {
       return res.status(404).json({
@@ -528,7 +450,7 @@ export async function updateCategoryImage(req: Request, res: Response) {
       id,
       { $set: { image } },
       { new: true, runValidators: true }
-    ).populate("masterCategoryId", "name nameKey image isActive");
+    );
 
     return res.json({
       success: true,
@@ -572,7 +494,7 @@ export async function removeCategoryImage(req: Request, res: Response) {
       id,
       { $set: { image } },
       { new: true, runValidators: true }
-    ).populate("masterCategoryId", "name nameKey image isActive");
+    );
 
     return res.json({
       success: true,

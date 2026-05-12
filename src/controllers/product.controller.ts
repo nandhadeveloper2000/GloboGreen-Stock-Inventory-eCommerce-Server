@@ -902,7 +902,6 @@ function buildCreatePayload(body: any, user: any) {
       .map((item) => normalizeText(item))
       .filter(Boolean),
 
-    masterCategoryId: body?.masterCategoryId ?? null,
     categoryId: body?.categoryId ?? null,
     subcategoryId: body?.subcategoryId ?? null,
 
@@ -955,10 +954,6 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
     )
       .map((item) => normalizeText(item))
       .filter(Boolean);
-  }
-
-  if (body?.masterCategoryId !== undefined) {
-    payload.masterCategoryId = body.masterCategoryId;
   }
 
   if (body?.categoryId !== undefined) {
@@ -1226,12 +1221,6 @@ function validateCreatePayload(
     return false;
   }
 
-  if (
-    !validateRequiredObjectId(payload.masterCategoryId, "masterCategoryId", res)
-  ) {
-    return false;
-  }
-
   if (!validateRequiredObjectId(payload.categoryId, "categoryId", res)) {
     return false;
   }
@@ -1315,11 +1304,7 @@ function validateUpdatePayload(
   const compatibilityMode =
     isCompatibilityConfigurationMode(finalConfigurationMode);
 
-  const singleObjectIdFields = [
-    "masterCategoryId",
-    "categoryId",
-    "subcategoryId",
-  ] as const;
+  const singleObjectIdFields = ["categoryId", "subcategoryId"] as const;
 
   for (const field of singleObjectIdFields) {
     if (
@@ -1465,7 +1450,6 @@ function buildParallelArrayIndexErrorResponse(res: Response) {
 /* ---------------- POPULATE ---------------- */
 
 const productPopulate = [
-  { path: "masterCategoryId", select: "name" },
   { path: "categoryId", select: "name" },
   { path: "subcategoryId", select: "name categoryId" },
   { path: "brandId", select: "name" },
@@ -1799,11 +1783,18 @@ export async function listPendingApprovals(req: Request, res: Response) {
     const filter: Record<string, unknown> = { approvalStatus: "PENDING" };
     if (q) {
       const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      filter.$or = [{ name: rx }, { nameKey: rx }];
+      filter.$or = [{ itemName: rx }, { itemKey: rx }, { sku: rx }];
     }
 
     const [rows, total] = await Promise.all([
-      ProductModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      ProductModel.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .select(
+          "_id itemName itemKey sku approvalStatus createdAt createdBy createdByRole"
+        )
+        .lean(),
       ProductModel.countDocuments(filter),
     ]);
 

@@ -235,13 +235,6 @@ const ProductSchema = new Schema(
       index: true,
     },
 
-    masterCategoryId: {
-      type: Schema.Types.ObjectId,
-      ref: "MasterCategory",
-      required: true,
-      index: true,
-    },
-
     categoryId: {
       type: Schema.Types.ObjectId,
       ref: "Category",
@@ -420,7 +413,7 @@ type MutableProductDocument = Omit<
 /* ---------------- INDEXES ---------------- */
 ProductSchema.index({ itemName: 1 });
 ProductSchema.index({ configurationMode: 1, createdAt: -1 });
-ProductSchema.index({ masterCategoryId: 1, categoryId: 1, subcategoryId: 1 });
+ProductSchema.index({ categoryId: 1, subcategoryId: 1 });
 ProductSchema.index({ brandId: 1 });
 ProductSchema.index({ modelId: 1 });
 ProductSchema.index({ approvalStatus: 1, isActiveGlobal: 1, createdAt: -1 });

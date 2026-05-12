@@ -34,6 +34,11 @@ const norm = (value: unknown): string => String(value ?? "").trim();
 
 const keyOf = (value: unknown): string => norm(value).toLowerCase();
 
+const categoryPopulate = {
+  path: "categoryId",
+  select: "name nameKey image isActive",
+};
+
 function fileFrom(req: Request): Express.Multer.File | undefined {
   return (req as any).file as Express.Multer.File | undefined;
 }
@@ -168,14 +173,9 @@ export async function createSubCategory(req: Request, res: Response) {
       createdBy: buildCreatedBy(getAuthUser(req)),
     });
 
-    const populated = await SubCategoryModel.findById(doc._id).populate({
-      path: "categoryId",
-      select: "name nameKey image isActive masterCategoryId",
-      populate: {
-        path: "masterCategoryId",
-        select: "name nameKey image isActive",
-      },
-    });
+    const populated = await SubCategoryModel.findById(doc._id).populate(
+      categoryPopulate
+    );
 
     return res.status(201).json({
       success: true,
@@ -228,14 +228,7 @@ export async function listSubCategories(req: Request, res: Response) {
     }
 
     const rows = await SubCategoryModel.find(filter)
-      .populate({
-        path: "categoryId",
-        select: "name nameKey image isActive masterCategoryId",
-        populate: {
-          path: "masterCategoryId",
-          select: "name nameKey image isActive",
-        },
-      })
+      .populate(categoryPopulate)
       .sort({ nameKey: 1 })
       .limit(500);
 
@@ -265,14 +258,7 @@ export async function getSubCategory(req: Request, res: Response) {
       });
     }
 
-    const doc = await SubCategoryModel.findById(id).populate({
-      path: "categoryId",
-      select: "name nameKey image isActive masterCategoryId",
-      populate: {
-        path: "masterCategoryId",
-        select: "name nameKey image isActive",
-      },
-    });
+    const doc = await SubCategoryModel.findById(id).populate(categoryPopulate);
 
     if (!doc) {
       return res.status(404).json({
@@ -364,14 +350,7 @@ export async function updateSubCategory(req: Request, res: Response) {
       id,
       { $set: updateData },
       { new: true, runValidators: true }
-    ).populate({
-      path: "categoryId",
-      select: "name nameKey image isActive masterCategoryId",
-      populate: {
-        path: "masterCategoryId",
-        select: "name nameKey image isActive",
-      },
-    });
+    ).populate(categoryPopulate);
 
     return res.json({
       success: true,
@@ -473,14 +452,7 @@ export async function toggleSubCategoryActive(req: Request, res: Response) {
       id,
       { $set: { isActive } },
       { new: true, runValidators: true }
-    ).populate({
-      path: "categoryId",
-      select: "name nameKey image isActive masterCategoryId",
-      populate: {
-        path: "masterCategoryId",
-        select: "name nameKey image isActive",
-      },
-    });
+    ).populate(categoryPopulate);
 
     if (!updated) {
       return res.status(404).json({
@@ -544,14 +516,7 @@ export async function updateSubCategoryImage(req: Request, res: Response) {
       id,
       { $set: { image } },
       { new: true, runValidators: true }
-    ).populate({
-      path: "categoryId",
-      select: "name nameKey image isActive masterCategoryId",
-      populate: {
-        path: "masterCategoryId",
-        select: "name nameKey image isActive",
-      },
-    });
+    ).populate(categoryPopulate);
 
     return res.json({
       success: true,
@@ -595,14 +560,7 @@ export async function removeSubCategoryImage(req: Request, res: Response) {
       id,
       { $set: { image } },
       { new: true, runValidators: true }
-    ).populate({
-      path: "categoryId",
-      select: "name nameKey image isActive masterCategoryId",
-      populate: {
-        path: "masterCategoryId",
-        select: "name nameKey image isActive",
-      },
-    });
+    ).populate(categoryPopulate);
 
     return res.json({
       success: true,

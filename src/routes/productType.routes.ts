@@ -1,21 +1,17 @@
 import { Router } from "express";
+
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
-import { upload } from "../middlewares/upload";
-
 import {
   createProductType,
-  listProductTypes,
-  getProductType,
-  updateProductType,
   deleteProductType,
+  getProductType,
+  listProductTypes,
   toggleProductTypeActive,
-  updateProductTypeImage,
-  removeProductTypeImage,
+  updateProductType,
 } from "../controllers/productType.controller";
 
 const router = Router();
-const imageUpload = upload.single("image");
 
 router.get("/", auth, listProductTypes);
 router.get("/:id", auth, getProductType);
@@ -24,7 +20,6 @@ router.post(
   "/",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  imageUpload,
   createProductType
 );
 
@@ -40,21 +35,6 @@ router.put(
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
   toggleProductTypeActive
-);
-
-router.put(
-  "/:id/image",
-  auth,
-  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  imageUpload,
-  updateProductTypeImage
-);
-
-router.delete(
-  "/:id/image",
-  auth,
-  requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
-  removeProductTypeImage
 );
 
 router.delete(

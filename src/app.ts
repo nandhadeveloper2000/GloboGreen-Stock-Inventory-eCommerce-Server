@@ -18,6 +18,7 @@ const envOrigins = (process.env.FRONTEND_URL || "")
 const defaultDevOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
+  "http://localhost:3001",
   "http://localhost:8081",
 ];
 

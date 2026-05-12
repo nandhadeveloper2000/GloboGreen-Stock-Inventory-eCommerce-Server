@@ -6,12 +6,12 @@ import staffRoutes from "./staff.routes";
 import shopownersRoutes from "./shopowner.routes";
 import shopRoutes from "./shop.routes";
 import shopstaffRoutes from "./shopstaff.routes";
-import masterCategoryRoutes from "./masterCategory.routes";
 import categoryRoutes from "./category.routes";
 import subCategoryRoutes from "./subcategory.routes";
 import brandRoutes from "./brand.routes";
 import seriesRoutes from "./series.routes";
 import modelRoutes from "./model.routes";
+import productTypeRoutes from "./productType.routes";
 import ProductCompatibilityRoutes from "./productCompatibility.routes";
 import proudctRoutes from "./product.routes";
 import shopCategoryMapRoutes from "./shopCategoryMap.routes";
@@ -57,12 +57,12 @@ router.use("/shops", shopRoutes);
 router.use("/shopstaff", shopstaffRoutes);
 
 /* ---------------- CATALOG / PRODUCTS / VENDORS ---------------- */
-router.use("/master-categories", masterCategoryRoutes);
 router.use("/categories", categoryRoutes);
 router.use("/sub-categories", subCategoryRoutes);
 router.use("/brands", brandRoutes);
 router.use("/series", seriesRoutes);
 router.use("/models", modelRoutes);
+router.use("/product-types", productTypeRoutes);
 router.use("/productcompatibility", ProductCompatibilityRoutes);
 router.use("/product", proudctRoutes);
 router.use("/shop-category-maps", shopCategoryMapRoutes);

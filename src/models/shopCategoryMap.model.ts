@@ -41,13 +41,6 @@ const ShopCategoryMapSchema = new Schema(
       index: true,
     },
 
-    masterCategoryId: {
-      type: Schema.Types.ObjectId,
-      ref: "MasterCategory",
-      required: true,
-      index: true,
-    },
-
     categoryId: {
       type: Schema.Types.ObjectId,
       ref: "Category",

@@ -311,7 +311,6 @@ export async function createStockTransfer(req: Request, res: Response) {
                 itemCode: sourceProduct.itemCode,
                 itemModelNumber: sourceProduct.itemModelNumber,
                 sku: sourceProduct.sku,
-                masterCategoryId: sourceProduct.masterCategoryId,
                 categoryId: sourceProduct.categoryId,
                 subcategoryId: sourceProduct.subcategoryId,
                 brandId: sourceProduct.brandId,

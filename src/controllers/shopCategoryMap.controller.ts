@@ -94,6 +94,12 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function buildShopCategoryMapQuery(query: any) {
+  return query
+    .populate("shopId", "shopName name code shopType")
+    .populate("categoryId", "name image isActive");
+}
+
 /**
  * CREATE SHOP CATEGORY MAP
  * POST /api/shop-category-maps
@@ -122,9 +128,7 @@ export async function createShopCategoryMap(req: AuthRequest, res: Response) {
 
     const [shop, category] = await Promise.all([
       ShopModel.findById(shopId).select("_id shopName name isActive").lean(),
-      CategoryModel.findById(categoryId)
-        .select("_id masterCategoryId name isActive")
-        .lean(),
+      CategoryModel.findById(categoryId).select("_id name isActive").lean(),
     ]);
 
     if (!shop) {
@@ -168,16 +172,13 @@ export async function createShopCategoryMap(req: AuthRequest, res: Response) {
     const created = await ShopCategoryMapModel.create({
       shopId,
       categoryId,
-      masterCategoryId: category.masterCategoryId,
       isActive: Boolean(isActive),
       createdBy,
     });
 
-    const data = await ShopCategoryMapModel.findById(created._id)
-      .populate("shopId", "shopName name code shopType")
-      .populate("masterCategoryId", "name")
-      .populate("categoryId", "name image isActive")
-      .lean();
+    const data = await buildShopCategoryMapQuery(
+      ShopCategoryMapModel.findById(created._id)
+    ).lean();
 
     return res.status(201).json({
       success: true,
@@ -257,7 +258,7 @@ export async function bulkCreateShopCategoryMaps(
       _id: { $in: cleanCategoryIds },
       isActive: true,
     })
-      .select("_id masterCategoryId name")
+      .select("_id name")
       .lean();
 
     if (!categories.length) {
@@ -298,22 +299,18 @@ export async function bulkCreateShopCategoryMaps(
     const docs = newCategories.map((category) => ({
       shopId,
       categoryId: category._id,
-      masterCategoryId: category.masterCategoryId,
       isActive: true,
       createdBy,
     }));
 
     await ShopCategoryMapModel.insertMany(docs, { ordered: false });
 
-    const data = await ShopCategoryMapModel.find({
-      shopId,
-      categoryId: { $in: newCategories.map((category) => category._id) },
-    })
-      .populate("shopId", "shopName name code shopType")
-      .populate("masterCategoryId", "name")
-      .populate("categoryId", "name image isActive")
-      .sort({ createdAt: -1 })
-      .lean();
+    const data = await buildShopCategoryMapQuery(
+      ShopCategoryMapModel.find({
+        shopId,
+        categoryId: { $in: newCategories.map((category) => category._id) },
+      }).sort({ createdAt: -1 })
+    ).lean();
 
     const createdCount = newCategories.length;
     const skippedCount = existingMaps.length;
@@ -382,104 +379,22 @@ export async function listShopCategoryMaps(req: Request, res: Response) {
       filter.isActive = false;
     }
 
-    const pipeline: mongoose.PipelineStage[] = [
-      { $match: filter },
-
-      {
-        $lookup: {
-          from: "shops",
-          localField: "shopId",
-          foreignField: "_id",
-          as: "shop",
-        },
-      },
-      { $unwind: { path: "$shop", preserveNullAndEmptyArrays: true } },
-
-      {
-        $lookup: {
-          from: "mastercategories",
-          localField: "masterCategoryId",
-          foreignField: "_id",
-          as: "masterCategory",
-        },
-      },
-      {
-        $unwind: {
-          path: "$masterCategory",
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-
-      {
-        $lookup: {
-          from: "categories",
-          localField: "categoryId",
-          foreignField: "_id",
-          as: "category",
-        },
-      },
-      { $unwind: { path: "$category", preserveNullAndEmptyArrays: true } },
-    ];
+    let data = (await buildShopCategoryMapQuery(
+      ShopCategoryMapModel.find(filter).sort({ createdAt: -1 })
+    ).lean()) as any[];
 
     if (search) {
       const regex = new RegExp(escapeRegex(search), "i");
-
-      pipeline.push({
-        $match: {
-          $or: [
-            { "shop.shopName": regex },
-            { "shop.name": regex },
-            { "shop.code": regex },
-            { "category.name": regex },
-            { "masterCategory.name": regex },
-          ],
-        },
-      });
+      data = data.filter((row) =>
+        regex.test(String(row.shopId?.shopName || "")) ||
+        regex.test(String(row.shopId?.name || "")) ||
+        regex.test(String(row.shopId?.code || "")) ||
+        regex.test(String(row.categoryId?.name || ""))
+      );
     }
 
-    pipeline.push({
-      $facet: {
-        data: [
-          { $sort: { createdAt: -1 } },
-          { $skip: skip },
-          { $limit: limit },
-          {
-            $project: {
-              shopId: 1,
-              masterCategoryId: 1,
-              categoryId: 1,
-              isActive: 1,
-              createdBy: 1,
-              createdAt: 1,
-              updatedAt: 1,
-              shop: {
-                _id: "$shop._id",
-                shopName: "$shop.shopName",
-                name: "$shop.name",
-                code: "$shop.code",
-                shopType: "$shop.shopType",
-              },
-              masterCategory: {
-                _id: "$masterCategory._id",
-                name: "$masterCategory.name",
-              },
-              category: {
-                _id: "$category._id",
-                name: "$category.name",
-                image: "$category.image",
-                isActive: "$category.isActive",
-              },
-            },
-          },
-        ],
-        total: [{ $count: "count" }],
-      },
-    });
-
-    const result = await ShopCategoryMapModel.aggregate(pipeline);
-
-    const data = result?.[0]?.data || [];
-    const total = result?.[0]?.total?.[0]?.count || 0;
+    const total = data.length;
+    data = data.slice(skip, skip + limit);
 
     return res.status(200).json({
       success: true,
@@ -517,11 +432,9 @@ export async function getShopCategoryMapById(req: Request, res: Response) {
       });
     }
 
-    const data = await ShopCategoryMapModel.findById(id)
-      .populate("shopId", "shopName name code shopType")
-      .populate("masterCategoryId", "name")
-      .populate("categoryId", "name image isActive")
-      .lean();
+    const data = await buildShopCategoryMapQuery(
+      ShopCategoryMapModel.findById(id)
+    ).lean();
 
     if (!data) {
       return res.status(404).json({
@@ -560,22 +473,12 @@ export async function listShopCategoriesByShop(req: Request, res: Response) {
       });
     }
 
-    const rows = await ShopCategoryMapModel.find({
-      shopId,
-      isActive: true,
-    })
-      .populate({
-        path: "categoryId",
-        select: "name image masterCategoryId isActive",
-        populate: {
-          path: "masterCategoryId",
-          select: "name image isActive",
-        },
-      })
-      .populate("shopId", "shopName name code shopType")
-      .populate("masterCategoryId", "name")
-      .sort({ createdAt: -1 })
-      .lean();
+    const rows = await buildShopCategoryMapQuery(
+      ShopCategoryMapModel.find({
+        shopId,
+        isActive: true,
+      }).sort({ createdAt: -1 })
+    ).lean();
 
     return res.status(200).json({
       success: true,
@@ -617,15 +520,13 @@ export async function updateShopCategoryMap(req: Request, res: Response) {
       });
     }
 
-    const data = await ShopCategoryMapModel.findByIdAndUpdate(
-      id,
-      { $set: { isActive } },
-      { new: true, runValidators: true }
-    )
-      .populate("shopId", "shopName name code shopType")
-      .populate("masterCategoryId", "name")
-      .populate("categoryId", "name image isActive")
-      .lean();
+    const data = await buildShopCategoryMapQuery(
+      ShopCategoryMapModel.findByIdAndUpdate(
+        id,
+        { $set: { isActive } },
+        { new: true, runValidators: true }
+      )
+    ).lean();
 
     if (!data) {
       return res.status(404).json({
@@ -676,11 +577,9 @@ export async function toggleShopCategoryMap(req: Request, res: Response) {
     existing.isActive = !existing.isActive;
     await existing.save();
 
-    const data = await ShopCategoryMapModel.findById(id)
-      .populate("shopId", "shopName name code shopType")
-      .populate("masterCategoryId", "name")
-      .populate("categoryId", "name image isActive")
-      .lean();
+    const data = await buildShopCategoryMapQuery(
+      ShopCategoryMapModel.findById(id)
+    ).lean();
 
     return res.status(200).json({
       success: true,

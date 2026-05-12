@@ -69,7 +69,6 @@ type ApplicableResponseItem = {
   _id: string;
   name: string;
   categoryName?: string;
-  masterCategoryName?: string;
 };
 
 type DiscountResponseRow = {
@@ -104,11 +103,7 @@ async function resolveApplicableItems<T extends DiscountResponseRow>(rows: T[]) 
             $in: Array.from(categoryIds).map((id) => new mongoose.Types.ObjectId(id)),
           },
         })
-          .select("name masterCategoryId")
-          .populate({
-            path: "masterCategoryId",
-            select: "name",
-          })
+          .select("name")
           .lean()
       : Promise.resolve([]),
     subCategoryIds.size
@@ -120,11 +115,7 @@ async function resolveApplicableItems<T extends DiscountResponseRow>(rows: T[]) 
           .select("name categoryId")
           .populate({
             path: "categoryId",
-            select: "name masterCategoryId",
-            populate: {
-              path: "masterCategoryId",
-              select: "name",
-            },
+            select: "name",
           })
           .lean()
       : Promise.resolve([]),
@@ -145,10 +136,6 @@ async function resolveApplicableItems<T extends DiscountResponseRow>(rows: T[]) 
       {
         _id: String(item._id),
         name: item.name || "Unnamed Category",
-        masterCategoryName:
-          item.masterCategoryId && typeof item.masterCategoryId === "object"
-            ? norm(item.masterCategoryId.name)
-            : "",
       },
     ])
   );
@@ -159,11 +146,6 @@ async function resolveApplicableItems<T extends DiscountResponseRow>(rows: T[]) 
         item.categoryId && typeof item.categoryId === "object"
           ? item.categoryId
           : null;
-      const masterCategory =
-        category?.masterCategoryId &&
-        typeof category.masterCategoryId === "object"
-          ? category.masterCategoryId
-          : null;
 
       return [
         String(item._id),
@@ -171,7 +153,6 @@ async function resolveApplicableItems<T extends DiscountResponseRow>(rows: T[]) 
           _id: String(item._id),
           name: item.name || "Unnamed Subcategory",
           categoryName: norm(category?.name),
-          masterCategoryName: norm(masterCategory?.name),
         },
       ];
     })

@@ -177,13 +177,6 @@ const ShopProductSchema = new Schema(
       trim: true,
     },
 
-    masterCategoryId: {
-      type: Schema.Types.ObjectId,
-      ref: "MasterCategory",
-      default: null,
-      index: true,
-    },
-
     categoryId: {
       type: Schema.Types.ObjectId,
       ref: "Category",
@@ -467,7 +460,6 @@ ShopProductSchema.pre("validate", function () {
     doc.itemKey = String(doc.itemKey).trim();
   }
 
-  doc.masterCategoryId = doc.masterCategoryId || null;
   doc.categoryId = doc.categoryId || null;
   doc.subcategoryId = doc.subcategoryId || null;
   doc.brandId = doc.brandId || null;

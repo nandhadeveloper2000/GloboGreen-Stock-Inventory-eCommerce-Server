@@ -586,7 +586,6 @@ function buildProductSnapshot(product: any) {
     itemName: String(product?.itemName || "").trim(),
     itemModelNumber: String(product?.itemModelNumber || "").trim(),
     itemKey: String(product?.itemKey || "").trim(),
-    masterCategoryId: product?.masterCategoryId || null,
     categoryId: product?.categoryId || null,
     subcategoryId: product?.subcategoryId || null,
     brandId: product?.brandId || null,
@@ -598,10 +597,9 @@ function productPopulate() {
   return {
     path: "productId",
     select:
-      "_id itemName itemModelNumber itemKey sku description configurationMode images videos variant masterCategoryId categoryId subcategoryId brandId modelId isActiveGlobal isActive approvalStatus",
+      "_id itemName itemModelNumber itemKey sku description configurationMode images videos variant categoryId subcategoryId brandId modelId isActiveGlobal isActive approvalStatus",
     populate: [
-      { path: "masterCategoryId", select: "_id name image" },
-      { path: "categoryId", select: "_id name image masterCategoryId" },
+      { path: "categoryId", select: "_id name image" },
       { path: "subcategoryId", select: "_id name image categoryId" },
       { path: "brandId", select: "_id name image" },
       { path: "modelId", select: "_id name image brandId" },
@@ -636,8 +634,7 @@ function buildApprovedActiveProductFilter() {
 function populateShopProductQuery(query: any) {
   return query
     .populate(productPopulate())
-    .populate("masterCategoryId", "_id name image")
-    .populate("categoryId", "_id name image masterCategoryId")
+    .populate("categoryId", "_id name image")
     .populate("subcategoryId", "_id name image categoryId")
     .populate("brandId", "_id name image")
     .populate("modelId", "_id name image brandId")
@@ -687,7 +684,7 @@ export async function addProductToShop(req: Request, res: Response) {
     }
 
     const product = await ProductModel.findById(productId).select(
-      "_id itemName itemModelNumber itemKey sku masterCategoryId categoryId subcategoryId brandId modelId configurationMode variant images isActiveGlobal isActive approvalStatus"
+      "_id itemName itemModelNumber itemKey sku categoryId subcategoryId brandId modelId configurationMode variant images isActiveGlobal isActive approvalStatus"
     );
 
     if (!product) {
@@ -1072,11 +1069,10 @@ export async function listAvailableProductsForShop(req: Request, res: Response) 
 
     const data = await ProductModel.find(filter)
       .select(
-        "_id itemName itemModelNumber itemKey sku description configurationMode images videos variant masterCategoryId categoryId subcategoryId brandId modelId isActiveGlobal isActive approvalStatus"
+        "_id itemName itemModelNumber itemKey sku description configurationMode images videos variant categoryId subcategoryId brandId modelId isActiveGlobal isActive approvalStatus"
       )
       .sort({ itemName: 1 })
-      .populate("masterCategoryId", "_id name image")
-      .populate("categoryId", "_id name image masterCategoryId")
+      .populate("categoryId", "_id name image")
       .populate("subcategoryId", "_id name image categoryId")
       .populate("brandId", "_id name image")
       .populate("modelId", "_id name image brandId");
