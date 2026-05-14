@@ -70,6 +70,206 @@ function uniqueCleanStrings(values: unknown[]) {
   );
 }
 
+function hasMeaningfulValue(value: unknown) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+
+  return true;
+}
+
+function normalizeDynamicFieldMap(
+  value: unknown
+): Map<string, { value: unknown; unit?: string }> | undefined {
+  const entries: Array<[string, { value: unknown; unit?: string }]> = [];
+  const source =
+    value instanceof Map
+      ? Array.from(value.entries())
+      : value && typeof value === "object" && !Array.isArray(value)
+        ? Object.entries(value as Record<string, unknown>)
+        : [];
+
+  for (const [rawKey, rawValue] of source) {
+    const key = String(rawKey || "").trim();
+
+    if (!key) continue;
+
+    const dynamicValue: { value?: unknown; unit?: unknown } =
+      rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)
+        ? (rawValue as { value?: unknown; unit?: unknown })
+        : { value: rawValue };
+
+    const normalizedValue =
+      typeof dynamicValue.value === "string"
+        ? dynamicValue.value.trim()
+        : dynamicValue.value;
+    const unit = String(dynamicValue.unit ?? "").trim();
+
+    if (!hasMeaningfulValue(normalizedValue) && !unit) {
+      continue;
+    }
+
+    entries.push([
+      key,
+      {
+        value: normalizedValue,
+        ...(unit ? { unit } : {}),
+      },
+    ]);
+  }
+
+  return entries.length ? new Map(entries) : undefined;
+}
+
+function normalizeDynamicFieldStoredValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item.trim() : item))
+      .filter((item) => hasMeaningfulValue(item));
+  }
+
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const candidate = value as Record<string, unknown>;
+    const normalized = {
+      ...(typeof candidate.url === "string" && candidate.url.trim()
+        ? { url: candidate.url.trim() }
+        : {}),
+      ...(typeof candidate.publicId === "string" && candidate.publicId.trim()
+        ? { publicId: candidate.publicId.trim() }
+        : {}),
+      ...(typeof candidate.fileName === "string" && candidate.fileName.trim()
+        ? { fileName: candidate.fileName.trim() }
+        : {}),
+      ...(typeof candidate.mimeType === "string" && candidate.mimeType.trim()
+        ? { mimeType: candidate.mimeType.trim() }
+        : {}),
+    };
+
+    return Object.keys(normalized).length ? normalized : value;
+  }
+
+  return typeof value === "string" ? value.trim() : value;
+}
+
+function normalizeDynamicFieldValueSections(value: unknown) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalizedSections = value
+    .map((section) => {
+      const sectionHeadingName = String(
+        (section as { sectionHeadingName?: unknown })?.sectionHeadingName || ""
+      ).trim();
+      const sectionHeadingId = String(
+        (section as { sectionHeadingId?: unknown })?.sectionHeadingId || ""
+      ).trim();
+      const groups = Array.isArray(
+        (section as { groups?: unknown[] })?.groups
+      )
+        ? ((section as { groups?: unknown[] }).groups || [])
+            .map((group) => {
+              const groupName = String(
+                (group as { groupName?: unknown })?.groupName || ""
+              ).trim();
+              const groupId = String(
+                (group as { groupId?: unknown })?.groupId || ""
+              ).trim();
+              const fields = Array.isArray(
+                (group as { fields?: unknown[] })?.fields
+              )
+                ? ((group as { fields?: unknown[] }).fields || [])
+                    .map((field) => {
+                      const label = String(
+                        (field as { label?: unknown })?.label || ""
+                      ).trim();
+                      const key = String(
+                        (field as { key?: unknown })?.key || ""
+                      ).trim();
+                      const fieldId = String(
+                        (field as { fieldId?: unknown })?.fieldId || ""
+                      ).trim();
+                      const normalizedValue = normalizeDynamicFieldStoredValue(
+                        (field as { value?: unknown })?.value
+                      );
+                      const unit = String(
+                        (field as { unit?: unknown })?.unit || ""
+                      ).trim();
+
+                      if (
+                        !label ||
+                        !key ||
+                        (!hasMeaningfulValue(normalizedValue) &&
+                          !Array.isArray(normalizedValue) &&
+                          !(normalizedValue && typeof normalizedValue === "object") &&
+                          !unit)
+                      ) {
+                        if (
+                          Array.isArray(normalizedValue) &&
+                          normalizedValue.length === 0
+                        ) {
+                          return null;
+                        }
+
+                        if (
+                          normalizedValue &&
+                          typeof normalizedValue === "object" &&
+                          !Array.isArray(normalizedValue) &&
+                          Object.keys(normalizedValue as object).length === 0
+                        ) {
+                          return null;
+                        }
+
+                        if (!hasMeaningfulValue(normalizedValue) && !unit) {
+                          return null;
+                        }
+                      }
+
+                      return {
+                        ...(fieldId ? { fieldId } : {}),
+                        label,
+                        key,
+                        value: normalizedValue,
+                        ...(unit ? { unit } : {}),
+                      };
+                    })
+                    .filter(Boolean)
+                : [];
+
+              if (!groupName || fields.length === 0) {
+                return null;
+              }
+
+              return {
+                ...(groupId ? { groupId } : {}),
+                groupName,
+                fields,
+              };
+            })
+            .filter(Boolean)
+        : [];
+
+      if (!sectionHeadingName || groups.length === 0) {
+        return null;
+      }
+
+      return {
+        ...(sectionHeadingId ? { sectionHeadingId } : {}),
+        sectionHeadingName,
+        groups,
+      };
+    })
+    .filter(Boolean);
+
+  return normalizedSections.length
+    ? (normalizedSections as DynamicProductFieldSectionInput[])
+    : undefined;
+}
+
 /* ---------------- PRODUCT INFORMATION ---------------- */
 const ProductInformationFieldSchema = new Schema(
   {
@@ -198,6 +398,73 @@ const VariantItemSchema = new Schema(
   { _id: false }
 );
 
+const DynamicProductFieldValueSchema = new Schema(
+  {
+    fieldId: {
+      type: Schema.Types.ObjectId,
+      default: null,
+    },
+    label: {
+      type: String,
+      trim: true,
+      required: true,
+    },
+    key: {
+      type: String,
+      trim: true,
+      required: true,
+    },
+    value: {
+      type: Schema.Types.Mixed,
+      required: true,
+    },
+    unit: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+  },
+  { _id: false }
+);
+
+const DynamicProductFieldGroupSchema = new Schema(
+  {
+    groupId: {
+      type: Schema.Types.ObjectId,
+      default: null,
+    },
+    groupName: {
+      type: String,
+      trim: true,
+      required: true,
+    },
+    fields: {
+      type: [DynamicProductFieldValueSchema],
+      default: undefined,
+    },
+  },
+  { _id: false }
+);
+
+const DynamicProductFieldSectionSchema = new Schema(
+  {
+    sectionHeadingId: {
+      type: Schema.Types.ObjectId,
+      default: null,
+    },
+    sectionHeadingName: {
+      type: String,
+      trim: true,
+      required: true,
+    },
+    groups: {
+      type: [DynamicProductFieldGroupSchema],
+      default: undefined,
+    },
+  },
+  { _id: false }
+);
+
 /* ---------------- MAIN SCHEMA ---------------- */
 const ProductSchema = new Schema(
   {
@@ -249,6 +516,13 @@ const ProductSchema = new Schema(
       index: true,
     },
 
+    productTypeId: {
+      type: Schema.Types.ObjectId,
+      ref: "ProductType",
+      required: true,
+      index: true,
+    },
+
     // Product brand. Example: CEDO Back Cover
     brandId: {
       type: Schema.Types.ObjectId,
@@ -288,6 +562,17 @@ const ProductSchema = new Schema(
 
     productInformation: {
       type: [ProductInformationSectionSchema],
+      default: undefined,
+    },
+
+    dynamicFields: {
+      type: Map,
+      of: Schema.Types.Mixed,
+      default: {},
+    },
+
+    dynamicFieldValues: {
+      type: [DynamicProductFieldSectionSchema],
       default: undefined,
     },
 
@@ -385,8 +670,34 @@ type VariantInput = {
   isActive?: boolean;
 };
 
+type DynamicFieldEntryInput = {
+  value?: unknown;
+  unit?: unknown;
+};
+
+type DynamicProductFieldValueEntryInput = {
+  fieldId?: unknown;
+  label?: string;
+  key?: string;
+  value?: unknown;
+  unit?: unknown;
+};
+
+type DynamicProductFieldGroupInput = {
+  groupId?: unknown;
+  groupName?: string;
+  fields?: DynamicProductFieldValueEntryInput[];
+};
+
+type DynamicProductFieldSectionInput = {
+  sectionHeadingId?: unknown;
+  sectionHeadingName?: string;
+  groups?: DynamicProductFieldGroupInput[];
+};
+
 type MutableProductDocument = Omit<
   ProductDocument,
+  | "productTypeId"
   | "brandId"
   | "modelId"
   | "configurationMode"
@@ -396,8 +707,11 @@ type MutableProductDocument = Omit<
   | "compatible"
   | "variant"
   | "productInformation"
+  | "dynamicFields"
+  | "dynamicFieldValues"
   | "approvalStatus"
 > & {
+  productTypeId?: unknown;
   configurationMode?: string;
   searchKeys?: string[];
   brandId?: unknown;
@@ -407,15 +721,18 @@ type MutableProductDocument = Omit<
   compatible?: CompatibilityGroupInput[];
   variant?: VariantInput[];
   productInformation?: ProductInformationSectionInput[];
+  dynamicFields?: Map<string, DynamicFieldEntryInput> | Record<string, DynamicFieldEntryInput>;
+  dynamicFieldValues?: DynamicProductFieldSectionInput[];
   approvalStatus?: string;
 };
 
 /* ---------------- INDEXES ---------------- */
 ProductSchema.index({ itemName: 1 });
 ProductSchema.index({ configurationMode: 1, createdAt: -1 });
-ProductSchema.index({ categoryId: 1, subcategoryId: 1 });
+ProductSchema.index({ categoryId: 1, subcategoryId: 1, productTypeId: 1 });
 ProductSchema.index({ brandId: 1 });
 ProductSchema.index({ modelId: 1 });
+ProductSchema.index({ productTypeId: 1 });
 ProductSchema.index({ approvalStatus: 1, isActiveGlobal: 1, createdAt: -1 });
 ProductSchema.index({ createdBy: 1, createdByRole: 1 });
 ProductSchema.index({ isActive: 1, createdAt: -1 });
@@ -454,9 +771,13 @@ ProductSchema.pre("validate", function () {
     doc.description = doc.description.trim();
   }
 
+  doc.productTypeId = doc.productTypeId || undefined;
   doc.brandId = doc.brandId || undefined;
   doc.modelId = doc.modelId || null;
-
+  doc.dynamicFields = normalizeDynamicFieldMap(doc.dynamicFields);
+  doc.dynamicFieldValues = normalizeDynamicFieldValueSections(
+    doc.dynamicFieldValues
+  );
 
   doc.configurationMode = normalizeConfigurationMode(doc.configurationMode);
 });
@@ -514,6 +835,10 @@ ProductSchema.pre("save", function () {
     : undefined;
   doc.productInformation =
     productInformation?.length ? productInformation : undefined;
+  doc.dynamicFields = normalizeDynamicFieldMap(doc.dynamicFields);
+  doc.dynamicFieldValues = normalizeDynamicFieldValueSections(
+    doc.dynamicFieldValues
+  );
 
   const variant = Array.isArray(doc.variant)
     ? doc.variant
@@ -615,6 +940,54 @@ ProductSchema.pre("save", function () {
     ? doc.compatible.flatMap((item) => [item?.notes || ""])
     : [];
 
+  const legacyDynamicFieldValues = doc.dynamicFields
+    ? Array.from(doc.dynamicFields.values()).flatMap((entry) => [
+        typeof entry?.value === "string" ? entry.value : "",
+        typeof entry?.unit === "string" ? entry.unit : "",
+      ])
+    : [];
+
+  const structuredDynamicFieldValues = Array.isArray(doc.dynamicFieldValues)
+    ? doc.dynamicFieldValues.flatMap((section) => [
+        section?.sectionHeadingName || "",
+        ...(Array.isArray(section?.groups)
+          ? section.groups.flatMap((group) => [
+              group?.groupName || "",
+              ...(Array.isArray(group?.fields)
+                ? group.fields.flatMap((field) => {
+                    const rawValue = field?.value;
+                    const fileValue =
+                      rawValue &&
+                      typeof rawValue === "object" &&
+                      !Array.isArray(rawValue)
+                        ? (rawValue as {
+                            url?: string;
+                            fileName?: string;
+                          })
+                        : null;
+
+                    return [
+                      field?.label || "",
+                      field?.key || "",
+                      typeof rawValue === "string" ? rawValue : "",
+                      Array.isArray(rawValue)
+                        ? rawValue
+                            .filter(
+                              (item): item is string => typeof item === "string"
+                            )
+                            .join(" ")
+                        : "",
+                      typeof field?.unit === "string" ? field.unit : "",
+                      fileValue?.url || "",
+                      fileValue?.fileName || "",
+                    ];
+                  })
+                : []),
+            ])
+          : []),
+      ])
+    : [];
+
   const variantValues = Array.isArray(doc.variant)
     ? doc.variant.flatMap((variantItem) => {
         const attributeValues = Array.isArray(variantItem?.attributes)
@@ -682,6 +1055,8 @@ ProductSchema.pre("save", function () {
     doc.itemName || "",
     doc.sku || "",
     doc.description || "",
+    ...legacyDynamicFieldValues,
+    ...structuredDynamicFieldValues,
     ...mainProductInfoValues,
     ...compatibilityValues,
     ...variantValues,

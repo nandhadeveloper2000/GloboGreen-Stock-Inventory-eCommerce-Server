@@ -4,6 +4,12 @@ import {
   ProductModel,
   PRODUCT_CONFIGURATION_MODES,
 } from "../models/product.model";
+import { ProductTypeFieldBuilderModel } from "../models/productTypeFieldBuilder.model";
+import { ProductTypeModel } from "../models/productType.model";
+import {
+  hasMeaningfulDynamicValue,
+  normalizeProductTypeFieldKey,
+} from "../utils/productTypeFields";
 import { uploadImage } from "../utils/uploadImage";
 
 const isObjectId = (id: unknown) =>
@@ -78,6 +84,87 @@ type VariantVideoGroup = {
   videoField: string;
   fieldName?: string;
   fileNames?: string[];
+};
+
+type DynamicFieldValue = {
+  value: unknown;
+  unit?: string;
+};
+
+type DynamicFieldMap = Record<string, DynamicFieldValue>;
+
+type DynamicFileValue = {
+  url?: string;
+  publicId?: string;
+  fileName?: string;
+  mimeType?: string;
+  uploadField?: string;
+};
+
+type DynamicProductFieldValueEntry = {
+  fieldId?: string;
+  label?: string;
+  key?: string;
+  value?: unknown;
+  unit?: string;
+};
+
+type DynamicProductFieldValueGroup = {
+  groupId?: string;
+  groupName?: string;
+  fields?: DynamicProductFieldValueEntry[];
+};
+
+type DynamicProductFieldValueSection = {
+  sectionHeadingId?: string;
+  sectionHeadingName?: string;
+  groups?: DynamicProductFieldValueGroup[];
+};
+
+type DynamicProductFieldValues = DynamicProductFieldValueSection[];
+
+type DynamicFieldFileUploadMeta = {
+  sectionHeadingId?: string;
+  groupId?: string;
+  fieldId?: string;
+  key?: string;
+  uploadField?: string;
+};
+
+type ProductTypeFieldDefinition = {
+  _id?: string;
+  key: string;
+  label: string;
+  inputType:
+    | "text"
+    | "number"
+    | "textarea"
+    | "select"
+    | "multiSelect"
+    | "checkbox"
+    | "radio"
+    | "date"
+    | "file"
+    | "boolean";
+  required: boolean;
+  options?: string[];
+  hasUnit: boolean;
+  unitOptions?: string[];
+  active?: boolean;
+};
+
+type ProductTypeFieldBuilderGroup = {
+  _id?: string;
+  groupName: string;
+  isActive?: boolean;
+  fields?: ProductTypeFieldDefinition[];
+};
+
+type ProductTypeFieldBuilderSection = {
+  _id?: string;
+  headingName: string;
+  isActive?: boolean;
+  groups?: ProductTypeFieldBuilderGroup[];
 };
 
 /* ---------------- HELPERS ---------------- */
@@ -399,6 +486,554 @@ function validateObjectIdArray(
   }
 
   return true;
+}
+
+function normalizeDynamicFieldPrimitive(value: unknown) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  return value;
+}
+
+function normalizeDynamicFields(value: unknown): DynamicFieldMap {
+  const parsed = parseJsonField<Record<string, unknown>>(value, {});
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {};
+  }
+
+  const next: DynamicFieldMap = {};
+
+  for (const [rawKey, rawValue] of Object.entries(parsed)) {
+    const key = normalizeProductTypeFieldKey(rawKey);
+
+    if (!key) continue;
+
+    const candidate =
+      rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)
+        ? (rawValue as { value?: unknown; unit?: unknown })
+        : { value: rawValue };
+
+    const normalizedValue = normalizeDynamicFieldPrimitive(candidate.value);
+    const normalizedUnit = norm(candidate.unit);
+
+    if (!hasMeaningfulDynamicValue(normalizedValue) && !normalizedUnit) {
+      continue;
+    }
+
+    next[key] = {
+      value: normalizedValue,
+      ...(normalizedUnit ? { unit: normalizedUnit } : {}),
+    };
+  }
+
+  return next;
+}
+
+function dynamicFieldsToPlainObject(value: unknown): DynamicFieldMap {
+  if (value instanceof Map) {
+    return Object.fromEntries(value.entries()) as DynamicFieldMap;
+  }
+
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as DynamicFieldMap;
+  }
+
+  return {};
+}
+
+function dynamicFieldValuesToPlainArray(
+  value: unknown
+): DynamicProductFieldValues {
+  return Array.isArray(value) ? (value as DynamicProductFieldValues) : [];
+}
+
+function normalizeDynamicFileValue(value: unknown): DynamicFileValue | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = value as DynamicFileValue;
+  const normalized = {
+    ...(norm(candidate.url) ? { url: norm(candidate.url) } : {}),
+    ...(norm(candidate.publicId) ? { publicId: norm(candidate.publicId) } : {}),
+    ...(norm(candidate.fileName) ? { fileName: norm(candidate.fileName) } : {}),
+    ...(norm(candidate.mimeType) ? { mimeType: norm(candidate.mimeType) } : {}),
+    ...(norm(candidate.uploadField)
+      ? { uploadField: norm(candidate.uploadField) }
+      : {}),
+  };
+
+  return Object.keys(normalized).length ? normalized : null;
+}
+
+function hasMeaningfulDynamicProductValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+
+  if (value && typeof value === "object") {
+    const fileValue = normalizeDynamicFileValue(value);
+    return Boolean(
+      fileValue?.url ||
+        fileValue?.publicId ||
+        fileValue?.fileName ||
+        fileValue?.uploadField
+    );
+  }
+
+  return hasMeaningfulDynamicValue(value);
+}
+
+function normalizeDynamicProductFieldValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => norm(item))
+      .filter(Boolean);
+  }
+
+  const fileValue = normalizeDynamicFileValue(value);
+
+  if (fileValue) {
+    return fileValue;
+  }
+
+  return normalizeDynamicFieldPrimitive(value);
+}
+
+function buildLookupKey(type: "id" | "key", value: string) {
+  return `${type}:${value}`;
+}
+
+function setDynamicFieldLookupValue(
+  lookup: Map<string, DynamicFieldValue>,
+  params: {
+    fieldId?: string;
+    key?: string;
+    entry: DynamicFieldValue;
+  }
+) {
+  const fieldId = norm(params.fieldId);
+  const key = normalizeProductTypeFieldKey(params.key);
+
+  if (fieldId) {
+    lookup.set(buildLookupKey("id", fieldId), params.entry);
+  }
+
+  if (key) {
+    lookup.set(buildLookupKey("key", key), params.entry);
+  }
+}
+
+function getDynamicFieldLookupValue(
+  lookup: Map<string, DynamicFieldValue>,
+  params: {
+    fieldId?: string;
+    key?: string;
+  }
+) {
+  const fieldId = norm(params.fieldId);
+  const key = normalizeProductTypeFieldKey(params.key);
+
+  if (fieldId && lookup.has(buildLookupKey("id", fieldId))) {
+    return lookup.get(buildLookupKey("id", fieldId));
+  }
+
+  if (key && lookup.has(buildLookupKey("key", key))) {
+    return lookup.get(buildLookupKey("key", key));
+  }
+
+  return undefined;
+}
+
+function buildDynamicFieldValueLookup(value: unknown) {
+  const parsed = parseJsonField<DynamicProductFieldValues>(value, []);
+  const lookup = new Map<string, DynamicFieldValue>();
+
+  if (!Array.isArray(parsed)) {
+    return lookup;
+  }
+
+  for (const section of parsed) {
+    const groups = Array.isArray(section?.groups) ? section.groups : [];
+
+    for (const group of groups) {
+      const fields = Array.isArray(group?.fields) ? group.fields : [];
+
+      for (const field of fields) {
+        const normalizedValue = normalizeDynamicProductFieldValue(field?.value);
+        const unit = norm(field?.unit);
+
+        if (!hasMeaningfulDynamicProductValue(normalizedValue) && !unit) {
+          continue;
+        }
+
+        setDynamicFieldLookupValue(lookup, {
+          fieldId: norm(field?.fieldId),
+          key: norm(field?.key),
+          entry: {
+            value: normalizedValue,
+            ...(unit ? { unit } : {}),
+          },
+        });
+      }
+    }
+  }
+
+  return lookup;
+}
+
+function buildLegacyDynamicFieldLookup(value: unknown) {
+  const legacyFields = normalizeDynamicFields(value);
+  const lookup = new Map<string, DynamicFieldValue>();
+
+  for (const [key, entry] of Object.entries(legacyFields)) {
+    setDynamicFieldLookupValue(lookup, {
+      key,
+      entry,
+    });
+  }
+
+  return lookup;
+}
+
+function parseDynamicFieldFileUploadMeta(
+  value: unknown
+): DynamicFieldFileUploadMeta[] {
+  const parsed = parseJsonField<DynamicFieldFileUploadMeta[]>(value, []);
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  return parsed
+    .map((item) => ({
+      sectionHeadingId: norm(item?.sectionHeadingId),
+      groupId: norm(item?.groupId),
+      fieldId: norm(item?.fieldId),
+      key: normalizeProductTypeFieldKey(item?.key),
+      uploadField: norm(item?.uploadField),
+    }))
+    .filter((item) => item.uploadField && (item.fieldId || item.key));
+}
+
+async function attachDynamicFieldFileUploads(params: {
+  req: Request;
+  lookup: Map<string, DynamicFieldValue>;
+  uploadMeta: DynamicFieldFileUploadMeta[];
+}) {
+  if (!params.uploadMeta.length) {
+    return;
+  }
+
+  const filesMap = parseFilesMap(params.req);
+
+  for (const meta of params.uploadMeta) {
+    const files = filesMap[meta.uploadField || ""];
+
+    if (!files?.length) {
+      continue;
+    }
+
+    const file = files[0];
+    const uploaded = await uploadSingleFile(file);
+
+    setDynamicFieldLookupValue(params.lookup, {
+      fieldId: meta.fieldId,
+      key: meta.key,
+      entry: {
+        value: {
+          url: uploaded.url,
+          publicId: uploaded.publicId,
+          fileName: file.originalname,
+          mimeType: file.mimetype,
+        },
+      },
+    });
+  }
+}
+
+async function validateProductTypeContext(
+  payload: {
+    categoryId?: unknown;
+    subcategoryId?: unknown;
+    productTypeId?: unknown;
+  },
+  res: Response
+) {
+  if (
+    !validateRequiredObjectId(payload.productTypeId, "productTypeId", res)
+  ) {
+    return null;
+  }
+
+  const productType = await ProductTypeModel.findById(payload.productTypeId)
+    .select("subCategoryId")
+    .lean();
+
+  if (!productType) {
+    res.status(404).json({
+      success: false,
+      message: "Product Type not found",
+    });
+    return null;
+  }
+
+  if (
+    payload.subcategoryId &&
+    String(productType.subCategoryId || "") !== String(payload.subcategoryId)
+  ) {
+    res.status(400).json({
+      success: false,
+      message: "Selected Product Type does not belong to the selected SubCategory",
+    });
+    return null;
+  }
+
+  return productType;
+}
+
+async function validateAndNormalizeDynamicFields(
+  payload: {
+    categoryId?: unknown;
+    subcategoryId?: unknown;
+    productTypeId?: unknown;
+    dynamicFieldValues?: unknown;
+    dynamicFields?: unknown;
+    dynamicFieldFileUploads?: unknown;
+    req?: Request;
+  },
+  res: Response
+) {
+  const productType = await validateProductTypeContext(payload, res);
+
+  if (!productType) {
+    return null;
+  }
+
+  const builder = await ProductTypeFieldBuilderModel.findOne({
+    productTypeId: payload.productTypeId,
+    isActive: true,
+  })
+    .select("sectionHeadings")
+    .lean();
+
+  if (!builder) {
+    return [];
+  }
+
+  const lookup = buildDynamicFieldValueLookup(payload.dynamicFieldValues);
+  const legacyLookup = buildLegacyDynamicFieldLookup(payload.dynamicFields);
+
+  for (const [lookupKey, entry] of legacyLookup.entries()) {
+    if (!lookup.has(lookupKey)) {
+      lookup.set(lookupKey, entry);
+    }
+  }
+
+  if (payload.req) {
+    await attachDynamicFieldFileUploads({
+      req: payload.req,
+      lookup,
+      uploadMeta: parseDynamicFieldFileUploadMeta(payload.dynamicFieldFileUploads),
+    });
+  }
+
+  const normalizedSections: DynamicProductFieldValues = [];
+  const sectionHeadings = Array.isArray(builder.sectionHeadings)
+    ? (builder.sectionHeadings as ProductTypeFieldBuilderSection[])
+    : [];
+
+  for (const section of sectionHeadings) {
+    if (section?.isActive === false) {
+      continue;
+    }
+
+    const normalizedGroups: DynamicProductFieldValueGroup[] = [];
+    const groups = Array.isArray(section?.groups) ? section.groups : [];
+
+    for (const group of groups) {
+      if (group?.isActive === false) {
+        continue;
+      }
+
+      const normalizedFields: DynamicProductFieldValueEntry[] = [];
+      const fields = Array.isArray(group?.fields) ? group.fields : [];
+
+      for (const field of fields) {
+        if (field?.active === false) {
+          continue;
+        }
+
+        const fieldId = norm(field?._id);
+        const entry = getDynamicFieldLookupValue(lookup, {
+          fieldId,
+          key: field?.key,
+        });
+        let nextValue = normalizeDynamicProductFieldValue(entry?.value);
+        const unit = norm(entry?.unit);
+        const hasValue = hasMeaningfulDynamicProductValue(nextValue);
+
+        if (field.required && !hasValue) {
+          res.status(400).json({
+            success: false,
+            message: `${field.label} is required`,
+          });
+          return null;
+        }
+
+        if (!hasValue) {
+          continue;
+        }
+
+        if (field.inputType === "number") {
+          const numericValue = Number(nextValue);
+
+          if (!Number.isFinite(numericValue)) {
+            res.status(400).json({
+              success: false,
+              message: `${field.label} must be a valid number`,
+            });
+            return null;
+          }
+
+          nextValue = numericValue;
+        }
+
+        if (field.inputType === "select" || field.inputType === "radio") {
+          if (
+            Array.isArray(field.options) &&
+            field.options.length > 0 &&
+            !field.options.includes(String(nextValue))
+          ) {
+            res.status(400).json({
+              success: false,
+              message: `${field.label} has an invalid option`,
+            });
+            return null;
+          }
+        }
+
+        if (field.inputType === "multiSelect") {
+          const values = Array.isArray(nextValue)
+            ? nextValue.map((item) => norm(item)).filter(Boolean)
+            : typeof nextValue === "string"
+              ? nextValue
+                  .split(",")
+                  .map((item) => item.trim())
+                  .filter(Boolean)
+              : [];
+
+          if (field.required && values.length === 0) {
+            res.status(400).json({
+              success: false,
+              message: `${field.label} is required`,
+            });
+            return null;
+          }
+
+          if (
+            Array.isArray(field.options) &&
+            field.options.length > 0 &&
+            values.some((value) => !field.options?.includes(value))
+          ) {
+            res.status(400).json({
+              success: false,
+              message: `${field.label} has an invalid option`,
+            });
+            return null;
+          }
+
+          nextValue = values;
+        }
+
+        if (field.inputType === "checkbox" || field.inputType === "boolean") {
+          nextValue =
+            typeof nextValue === "boolean"
+              ? nextValue
+              : ["true", "1", "yes", "on"].includes(
+                  String(nextValue).trim().toLowerCase()
+                );
+        }
+
+        if (
+          field.inputType === "date" &&
+          Number.isNaN(new Date(String(nextValue)).getTime())
+        ) {
+          res.status(400).json({
+            success: false,
+            message: `${field.label} must be a valid date`,
+          });
+          return null;
+        }
+
+        if (field.inputType === "file") {
+          const fileValue = normalizeDynamicFileValue(nextValue);
+
+          if (!fileValue?.url) {
+            res.status(400).json({
+              success: false,
+              message: `${field.label} file upload is invalid`,
+            });
+            return null;
+          }
+
+          nextValue = fileValue;
+        }
+
+        if (field.hasUnit) {
+          if (!unit) {
+            res.status(400).json({
+              success: false,
+              message: `${field.label} unit is required`,
+            });
+            return null;
+          }
+
+          if (
+            Array.isArray(field.unitOptions) &&
+            field.unitOptions.length > 0 &&
+            !field.unitOptions.includes(unit)
+          ) {
+            res.status(400).json({
+              success: false,
+              message: `${field.label} has an invalid unit`,
+            });
+            return null;
+          }
+        }
+
+        normalizedFields.push({
+          ...(fieldId ? { fieldId } : {}),
+          label: field.label,
+          key: normalizeProductTypeFieldKey(field.key),
+          value: nextValue,
+          ...(field.hasUnit && unit ? { unit } : {}),
+        });
+      }
+
+      if (normalizedFields.length > 0) {
+        normalizedGroups.push({
+          ...(norm(group?._id) ? { groupId: norm(group?._id) } : {}),
+          groupName: group.groupName,
+          fields: normalizedFields,
+        });
+      }
+    }
+
+    if (normalizedGroups.length > 0) {
+      normalizedSections.push({
+        ...(norm(section?._id)
+          ? { sectionHeadingId: norm(section?._id) }
+          : {}),
+        sectionHeadingName: section.headingName,
+        groups: normalizedGroups,
+      });
+    }
+  }
+
+  return normalizedSections;
 }
 
 /* ---------------- NORMALIZERS ---------------- */
@@ -758,9 +1393,17 @@ function getVariantVideoUploadMap(req: Request) {
 }
 
 function getUploadResourceType(file: Express.Multer.File) {
-  return String(file.mimetype || "").toLowerCase().startsWith("video/")
-    ? "video"
-    : "image";
+  const mimeType = String(file.mimetype || "").toLowerCase();
+
+  if (mimeType.startsWith("video/")) {
+    return "video";
+  }
+
+  if (mimeType.startsWith("image/")) {
+    return "image";
+  }
+
+  return "auto";
 }
 
 async function uploadSingleFile(file: Express.Multer.File): Promise<ImageItem> {
@@ -890,6 +1533,10 @@ function buildCreatePayload(body: any, user: any) {
     body?.productInformation,
     []
   );
+  const dynamicFieldValues = dynamicFieldValuesToPlainArray(
+    parseJsonField<DynamicProductFieldValues>(body?.dynamicFieldValues, [])
+  );
+  const dynamicFields = normalizeDynamicFields(body?.dynamicFields);
 
   const configurationMode = normalizeConfigurationMode(body?.configurationMode);
 
@@ -904,6 +1551,7 @@ function buildCreatePayload(body: any, user: any) {
 
     categoryId: body?.categoryId ?? null,
     subcategoryId: body?.subcategoryId ?? null,
+    productTypeId: normalizeObjectIdField(body?.productTypeId),
 
     // Product brand: example CEDO Back Cover
     brandId: normalizeObjectIdField(body?.brandId),
@@ -916,6 +1564,11 @@ function buildCreatePayload(body: any, user: any) {
     compatible: normalizeCompatibility(compatible),
     variant: normalizeVariant(variant),
     productInformation: normalizeProductInformation(productInformation),
+    dynamicFieldValues,
+    dynamicFields,
+    dynamicFieldFileUploads: parseDynamicFieldFileUploadMeta(
+      body?.dynamicFieldFileUploads
+    ),
 
     configurationMode,
     approvalStatus,
@@ -964,6 +1617,10 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
     payload.subcategoryId = body.subcategoryId;
   }
 
+  if (body?.productTypeId !== undefined) {
+    payload.productTypeId = normalizeObjectIdField(body.productTypeId);
+  }
+
   if (body?.brandId !== undefined) {
     payload.brandId = normalizeObjectIdField(body.brandId);
   }
@@ -999,6 +1656,22 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
   if (body?.productInformation !== undefined) {
     payload.productInformation = normalizeProductInformation(
       parseJsonField<ProductInformationSection[]>(body.productInformation, [])
+    );
+  }
+
+  if (body?.dynamicFieldValues !== undefined) {
+    payload.dynamicFieldValues = dynamicFieldValuesToPlainArray(
+      parseJsonField<DynamicProductFieldValues>(body.dynamicFieldValues, [])
+    );
+  }
+
+  if (body?.dynamicFields !== undefined) {
+    payload.dynamicFields = normalizeDynamicFields(body.dynamicFields);
+  }
+
+  if (body?.dynamicFieldFileUploads !== undefined) {
+    payload.dynamicFieldFileUploads = parseDynamicFieldFileUploadMeta(
+      body.dynamicFieldFileUploads
     );
   }
 
@@ -1229,6 +1902,10 @@ function validateCreatePayload(
     return false;
   }
 
+  if (!validateRequiredObjectId(payload.productTypeId, "productTypeId", res)) {
+    return false;
+  }
+
   if (
     !validateOptionalObjectId(payload.brandId, "brandId", res, {
       required: true,
@@ -1304,7 +1981,11 @@ function validateUpdatePayload(
   const compatibilityMode =
     isCompatibilityConfigurationMode(finalConfigurationMode);
 
-  const singleObjectIdFields = ["categoryId", "subcategoryId"] as const;
+  const singleObjectIdFields = [
+    "categoryId",
+    "subcategoryId",
+    "productTypeId",
+  ] as const;
 
   for (const field of singleObjectIdFields) {
     if (
@@ -1452,6 +2133,7 @@ function buildParallelArrayIndexErrorResponse(res: Response) {
 const productPopulate = [
   { path: "categoryId", select: "name" },
   { path: "subcategoryId", select: "name categoryId" },
+  { path: "productTypeId", select: "name nameKey subCategoryId" },
   { path: "brandId", select: "name" },
   { path: "modelId", select: "name brandId" },
   { path: "compatible.brandId", select: "name" },
@@ -1558,6 +2240,22 @@ export async function createProduct(req: Request, res: Response) {
       return;
     }
 
+    const normalizedDynamicFieldValues = await validateAndNormalizeDynamicFields(
+      {
+        ...payload,
+        req,
+      },
+      res
+    );
+
+    if (!normalizedDynamicFieldValues) {
+      return;
+    }
+
+    payload.dynamicFieldValues = normalizedDynamicFieldValues;
+    delete (payload as Record<string, unknown>).dynamicFields;
+    delete (payload as Record<string, unknown>).dynamicFieldFileUploads;
+
     const duplicate = await findDuplicateProduct({
       sku: payload.sku as string,
     });
@@ -1653,6 +2351,36 @@ export async function updateProduct(req: Request, res: Response) {
     if (!validateUpdatePayload(payload, res, existing)) {
       return;
     }
+
+    const normalizedDynamicFieldValues = await validateAndNormalizeDynamicFields(
+      {
+        categoryId: payload.categoryId ?? existing.categoryId,
+        subcategoryId: payload.subcategoryId ?? existing.subcategoryId,
+        productTypeId: payload.productTypeId ?? existing.productTypeId,
+        dynamicFieldValues:
+          payload.dynamicFieldValues !== undefined
+            ? payload.dynamicFieldValues
+            : dynamicFieldValuesToPlainArray(existing.dynamicFieldValues),
+        dynamicFields:
+          payload.dynamicFields !== undefined
+            ? payload.dynamicFields
+            : dynamicFieldsToPlainObject(existing.dynamicFields),
+        dynamicFieldFileUploads:
+          payload.dynamicFieldFileUploads !== undefined
+            ? payload.dynamicFieldFileUploads
+            : [],
+        req,
+      },
+      res
+    );
+
+    if (!normalizedDynamicFieldValues) {
+      return;
+    }
+
+    payload.dynamicFieldValues = normalizedDynamicFieldValues;
+    delete payload.dynamicFields;
+    delete payload.dynamicFieldFileUploads;
 
     const duplicate = await findDuplicateProduct({
       sku: typeof payload.sku === "string" ? payload.sku : existing.sku,
