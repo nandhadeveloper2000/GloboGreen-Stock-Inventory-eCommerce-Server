@@ -5,6 +5,7 @@ export const PRODUCT_APPROVAL_STATUSES = [
 ] as const;
 
 export const PRODUCT_CONFIGURATION_MODES = [
+  "productTypeFields",
   "variant",
   "variantCompatibility",
   "productMediaInfoCompatibility",

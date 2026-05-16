@@ -16,11 +16,14 @@ export const PRODUCT_APPROVAL_STATUSES = [
 ] as const;
 
 export const PRODUCT_CONFIGURATION_MODES = [
+  "productTypeFields",
   "variant",
   "variantCompatibility",
   "productMediaInfoCompatibility",
   "productMediaInfo",
 ] as const;
+
+const DYNAMIC_VARIATION_MATRIX_FIELD_KEY = "__variationMatrix";
 
 /* ---------------- HELPERS ---------------- */
 function normalizeText(value: string) {
@@ -82,6 +85,188 @@ function hasMeaningfulValue(value: unknown) {
   return true;
 }
 
+function normalizeDynamicPrimitiveValue(value: unknown) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  return null;
+}
+
+function normalizeDynamicFileValue(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const normalized = {
+    ...(typeof candidate.url === "string" && candidate.url.trim()
+      ? { url: candidate.url.trim() }
+      : {}),
+    ...(typeof candidate.publicId === "string" && candidate.publicId.trim()
+      ? { publicId: candidate.publicId.trim() }
+      : {}),
+    ...(typeof candidate.fileName === "string" && candidate.fileName.trim()
+      ? { fileName: candidate.fileName.trim() }
+      : {}),
+    ...(typeof candidate.mimeType === "string" && candidate.mimeType.trim()
+      ? { mimeType: candidate.mimeType.trim() }
+      : {}),
+  };
+
+  return Object.keys(normalized).length ? normalized : null;
+}
+
+function isDynamicUnitValue(value: unknown) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "value" in (value as Record<string, unknown>)
+  );
+}
+
+function normalizeDynamicUnitValue(value: unknown) {
+  if (!isDynamicUnitValue(value)) {
+    return null;
+  }
+
+  const candidate = value as { value?: unknown; unit?: unknown };
+  const normalizedValue = normalizeDynamicPrimitiveValue(candidate.value);
+
+  if (normalizedValue === null) {
+    return null;
+  }
+
+  const unit = String(candidate.unit ?? "").trim();
+
+  return {
+    value: normalizedValue,
+    ...(unit ? { unit } : {}),
+  };
+}
+
+function normalizeDynamicVariationMatrixCellValue(value: unknown) {
+  const normalizedUnitValue = normalizeDynamicUnitValue(value);
+
+  if (normalizedUnitValue) {
+    return normalizedUnitValue;
+  }
+
+  return normalizeDynamicPrimitiveValue(value);
+}
+
+function normalizeDynamicVariationMatrixRow(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = value as {
+    comboKey?: unknown;
+    dimensions?: Record<string, unknown>;
+    values?: Record<string, unknown>;
+  };
+  const comboKey = String(candidate.comboKey ?? "").trim();
+
+  if (!comboKey) {
+    return null;
+  }
+
+  const dimensions = Object.entries(candidate.dimensions || {}).reduce<
+    Record<string, unknown>
+  >((acc, [key, rawValue]) => {
+    const normalizedKey = String(key || "").trim();
+    const normalizedValue = normalizeDynamicVariationMatrixCellValue(rawValue);
+
+    if (normalizedKey && normalizedValue !== null) {
+      acc[normalizedKey] = normalizedValue;
+    }
+
+    return acc;
+  }, {});
+
+  const values = Object.entries(candidate.values || {}).reduce<
+    Record<string, unknown>
+  >((acc, [key, rawValue]) => {
+    const normalizedKey = String(key || "").trim();
+    const normalizedValue = normalizeDynamicPrimitiveValue(rawValue);
+
+    if (normalizedKey && normalizedValue !== null) {
+      acc[normalizedKey] = normalizedValue;
+    }
+
+    return acc;
+  }, {});
+
+  return {
+    comboKey,
+    dimensions,
+    values,
+  };
+}
+
+function hasMeaningfulDynamicFieldStoredValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+
+  if (value && typeof value === "object") {
+    return Object.keys(value as object).length > 0;
+  }
+
+  return hasMeaningfulValue(value);
+}
+
+function flattenStructuredDynamicFieldValue(value: unknown): string[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  if (typeof value === "string") {
+    return value.trim() ? [value] : [];
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return [String(value)];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenStructuredDynamicFieldValue(item));
+  }
+
+  if (value && typeof value === "object") {
+    const fileValue = normalizeDynamicFileValue(value);
+
+    if (fileValue) {
+      return [fileValue.url || "", fileValue.fileName || ""].filter(Boolean);
+    }
+
+    const unitValue = normalizeDynamicUnitValue(value);
+
+    if (unitValue) {
+      return [
+        ...flattenStructuredDynamicFieldValue(unitValue.value),
+        typeof unitValue.unit === "string" ? unitValue.unit : "",
+      ].filter(Boolean);
+    }
+
+    return Object.values(value as Record<string, unknown>).flatMap((item) =>
+      flattenStructuredDynamicFieldValue(item)
+    );
+  }
+
+  return [];
+}
+
 function normalizeDynamicFieldMap(
   value: unknown
 ): Map<string, { value: unknown; unit?: string }> | undefined {
@@ -127,32 +312,73 @@ function normalizeDynamicFieldMap(
 
 function normalizeDynamicFieldStoredValue(value: unknown) {
   if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return [];
+    }
+
+    const normalizedFileValues = value
+      .map((item) => normalizeDynamicFileValue(item))
+      .filter(Boolean);
+
+    if (
+      normalizedFileValues.length === value.length &&
+      normalizedFileValues.length > 0
+    ) {
+      return normalizedFileValues;
+    }
+
+    const normalizedUnitValues = value
+      .map((item) => normalizeDynamicUnitValue(item))
+      .filter(Boolean);
+
+    if (
+      normalizedUnitValues.length === value.length &&
+      normalizedUnitValues.length > 0
+    ) {
+      return normalizedUnitValues;
+    }
+
+    const normalizedVariationRows = value
+      .map((item) => normalizeDynamicVariationMatrixRow(item))
+      .filter(Boolean);
+
+    if (
+      normalizedVariationRows.length === value.length &&
+      normalizedVariationRows.length > 0
+    ) {
+      return normalizedVariationRows;
+    }
+
     return value
-      .map((item) => (typeof item === "string" ? item.trim() : item))
-      .filter((item) => hasMeaningfulValue(item));
+      .map((item) => normalizeDynamicPrimitiveValue(item))
+      .filter((item) => item !== null);
   }
 
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const candidate = value as Record<string, unknown>;
-    const normalized = {
-      ...(typeof candidate.url === "string" && candidate.url.trim()
-        ? { url: candidate.url.trim() }
-        : {}),
-      ...(typeof candidate.publicId === "string" && candidate.publicId.trim()
-        ? { publicId: candidate.publicId.trim() }
-        : {}),
-      ...(typeof candidate.fileName === "string" && candidate.fileName.trim()
-        ? { fileName: candidate.fileName.trim() }
-        : {}),
-      ...(typeof candidate.mimeType === "string" && candidate.mimeType.trim()
-        ? { mimeType: candidate.mimeType.trim() }
-        : {}),
-    };
+  const fileValue = normalizeDynamicFileValue(value);
 
-    return Object.keys(normalized).length ? normalized : value;
+  if (fileValue) {
+    return fileValue;
   }
 
-  return typeof value === "string" ? value.trim() : value;
+  const unitValue = normalizeDynamicUnitValue(value);
+
+  if (unitValue) {
+    return unitValue;
+  }
+
+  const variationMatrixRow = normalizeDynamicVariationMatrixRow(value);
+
+  if (variationMatrixRow) {
+    return variationMatrixRow;
+  }
+
+  const primitiveValue = normalizeDynamicPrimitiveValue(value);
+
+  if (primitiveValue !== null) {
+    return primitiveValue;
+  }
+
+  return value;
 }
 
 function normalizeDynamicFieldValueSections(value: unknown) {
@@ -203,30 +429,10 @@ function normalizeDynamicFieldValueSections(value: unknown) {
                       if (
                         !label ||
                         !key ||
-                        (!hasMeaningfulValue(normalizedValue) &&
-                          !Array.isArray(normalizedValue) &&
-                          !(normalizedValue && typeof normalizedValue === "object") &&
+                        (!hasMeaningfulDynamicFieldStoredValue(normalizedValue) &&
                           !unit)
                       ) {
-                        if (
-                          Array.isArray(normalizedValue) &&
-                          normalizedValue.length === 0
-                        ) {
-                          return null;
-                        }
-
-                        if (
-                          normalizedValue &&
-                          typeof normalizedValue === "object" &&
-                          !Array.isArray(normalizedValue) &&
-                          Object.keys(normalizedValue as object).length === 0
-                        ) {
-                          return null;
-                        }
-
-                        if (!hasMeaningfulValue(normalizedValue) && !unit) {
-                          return null;
-                        }
+                        return null;
                       }
 
                       return {
@@ -955,31 +1161,17 @@ ProductSchema.pre("save", function () {
               group?.groupName || "",
               ...(Array.isArray(group?.fields)
                 ? group.fields.flatMap((field) => {
+                    if (field?.key === DYNAMIC_VARIATION_MATRIX_FIELD_KEY) {
+                      return [];
+                    }
+
                     const rawValue = field?.value;
-                    const fileValue =
-                      rawValue &&
-                      typeof rawValue === "object" &&
-                      !Array.isArray(rawValue)
-                        ? (rawValue as {
-                            url?: string;
-                            fileName?: string;
-                          })
-                        : null;
 
                     return [
                       field?.label || "",
                       field?.key || "",
-                      typeof rawValue === "string" ? rawValue : "",
-                      Array.isArray(rawValue)
-                        ? rawValue
-                            .filter(
-                              (item): item is string => typeof item === "string"
-                            )
-                            .join(" ")
-                        : "",
+                      ...flattenStructuredDynamicFieldValue(rawValue),
                       typeof field?.unit === "string" ? field.unit : "",
-                      fileValue?.url || "",
-                      fileValue?.fileName || "",
                     ];
                   })
                 : []),
@@ -1068,6 +1260,14 @@ ProductSchema.pre("save", function () {
     doc.images = undefined;
     doc.videos = undefined;
     doc.compatible = undefined;
+    doc.productInformation = undefined;
+  }
+
+  if (doc.configurationMode === "productTypeFields") {
+    doc.images = undefined;
+    doc.videos = undefined;
+    doc.compatible = undefined;
+    doc.variant = undefined;
     doc.productInformation = undefined;
   }
 

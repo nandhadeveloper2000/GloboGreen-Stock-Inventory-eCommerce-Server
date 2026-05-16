@@ -38,6 +38,10 @@ const ProductTypeFieldDefinitionSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    addMore: {
+      type: Boolean,
+      default: false,
+    },
     placeholder: {
       type: String,
       trim: true,

@@ -61,6 +61,7 @@ type ParsedFieldDefinition = {
   unitOptions?: string[];
   sortOrder: number;
   required: boolean;
+  addMore: boolean;
   hasUnit: boolean;
   active: boolean;
 };
@@ -165,6 +166,7 @@ function hasMeaningfulFieldContent(field: any) {
       normalizeStringList(field?.options).length ||
       normalizeStringList(field?.unitOptions).length ||
       field?.required !== undefined ||
+      field?.addMore !== undefined ||
       field?.hasUnit !== undefined ||
       field?.active !== undefined ||
       field?.isActive !== undefined ||
@@ -214,7 +216,7 @@ function sanitizeFieldDefinition(
 
   if (keyRegistry.has(key)) {
     return {
-      error: `Duplicate field key "${key}" is not allowed inside the same Product Type`,
+      error: `Duplicate field key "${key}" is not allowed inside the same group`,
     };
   }
 
@@ -245,6 +247,7 @@ function sanitizeFieldDefinition(
       ...(hasUnit && unitOptions.length > 0 ? { unitOptions } : {}),
       sortOrder: normalizeSortOrder(field?.sortOrder, fieldIndex + 1),
       required: parseBoolean(field?.required, false),
+      addMore: parseBoolean(field?.addMore, false),
       hasUnit,
       active: parseBoolean(field?.active ?? field?.isActive, true),
     },
@@ -254,8 +257,7 @@ function sanitizeFieldDefinition(
 function sanitizeGroupDefinition(
   group: any,
   sectionIndex: number,
-  groupIndex: number,
-  keyRegistry: Set<string>
+  groupIndex: number
 ):
   | { skip: true }
   | { error: string }
@@ -279,6 +281,7 @@ function sanitizeGroupDefinition(
   }
 
   const parsedFields: ParsedFieldDefinition[] = [];
+  const groupKeyRegistry = new Set<string>();
 
   for (let fieldIndex = 0; fieldIndex < rawFields.length; fieldIndex += 1) {
     const parsed = sanitizeFieldDefinition(
@@ -286,7 +289,7 @@ function sanitizeGroupDefinition(
       sectionIndex,
       groupIndex,
       fieldIndex,
-      keyRegistry
+      groupKeyRegistry
     );
 
     if ("error" in parsed) {
@@ -311,8 +314,7 @@ function sanitizeGroupDefinition(
 
 function sanitizeSectionHeading(
   section: any,
-  sectionIndex: number,
-  keyRegistry: Set<string>
+  sectionIndex: number
 ):
   | { skip: true }
   | { error: string }
@@ -343,8 +345,7 @@ function sanitizeSectionHeading(
     const parsed = sanitizeGroupDefinition(
       rawGroups[groupIndex],
       sectionIndex,
-      groupIndex,
-      keyRegistry
+      groupIndex
     );
 
     if ("error" in parsed) {
@@ -564,15 +565,10 @@ async function buildBuilderPayload(
     };
   }
 
-  const keyRegistry = new Set<string>();
   const parsedSections: ParsedSectionHeading[] = [];
 
   for (let sectionIndex = 0; sectionIndex < rawSections.length; sectionIndex += 1) {
-    const parsed = sanitizeSectionHeading(
-      rawSections[sectionIndex],
-      sectionIndex,
-      keyRegistry
-    );
+    const parsed = sanitizeSectionHeading(rawSections[sectionIndex], sectionIndex);
 
     if ("error" in parsed) {
       return {

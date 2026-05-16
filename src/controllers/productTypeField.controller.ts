@@ -54,6 +54,7 @@ type ParsedFieldDefinition = {
   label: string;
   inputType: (typeof PRODUCT_TYPE_FIELD_INPUT_TYPES)[number];
   required: boolean;
+  addMore: boolean;
   placeholder: string;
   options?: string[];
   hasUnit: boolean;
@@ -166,6 +167,7 @@ function sanitizeFieldDefinition(
       label,
       inputType,
       required: parseBoolean(field?.required, false),
+      addMore: parseBoolean(field?.addMore, false),
       placeholder: norm(field?.placeholder),
       ...(inputType === "select" && options.length > 0
         ? { options }

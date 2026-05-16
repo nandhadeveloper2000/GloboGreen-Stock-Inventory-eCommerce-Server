@@ -25,6 +25,20 @@ const PRODUCT_APPROVAL_STATUSES = [
 ] as const;
 
 const DEFAULT_PRODUCT_CONFIGURATION_MODE = "variant";
+const PRODUCT_TYPE_FIELDS_CONFIGURATION_MODE = "productTypeFields";
+const PRODUCT_VARIATION_SECTION_HEADING = "Variations";
+const PRODUCT_OFFER_SECTION_HEADING = "Offer";
+const DYNAMIC_VARIATION_META_GROUP_NAME = "__internal";
+const DYNAMIC_VARIATION_MATRIX_FIELD_KEY = "__variationMatrix";
+const DYNAMIC_VARIATION_OFFER_FIELD_KEYS = new Set([
+  "sku",
+  "externalProductId",
+  "externalProductIdType",
+  "itemCondition",
+  "yourPrice",
+  "quantity",
+  "offerConditionNote",
+]);
 
 type ProductApprovalStatus = (typeof PRODUCT_APPROVAL_STATUSES)[number];
 type ProductConfigurationMode = (typeof PRODUCT_CONFIGURATION_MODES)[number];
@@ -101,6 +115,17 @@ type DynamicFileValue = {
   uploadField?: string;
 };
 
+type DynamicUnitValue = {
+  value?: unknown;
+  unit?: unknown;
+};
+
+type DynamicVariationMatrixRow = {
+  comboKey?: unknown;
+  dimensions?: Record<string, unknown>;
+  values?: Record<string, unknown>;
+};
+
 type DynamicProductFieldValueEntry = {
   fieldId?: string;
   label?: string;
@@ -129,6 +154,7 @@ type DynamicFieldFileUploadMeta = {
   fieldId?: string;
   key?: string;
   uploadField?: string;
+  itemIndex?: number;
 };
 
 type ProductTypeFieldDefinition = {
@@ -147,6 +173,7 @@ type ProductTypeFieldDefinition = {
     | "file"
     | "boolean";
   required: boolean;
+  addMore?: boolean;
   options?: string[];
   hasUnit: boolean;
   unitOptions?: string[];
@@ -250,6 +277,19 @@ function isCompatibilityConfigurationMode(mode: unknown) {
   return COMPATIBILITY_CONFIGURATION_MODES.includes(
     normalizeConfigurationMode(mode) as ProductConfigurationMode
   );
+}
+
+function isProductTypeFieldsConfigurationMode(mode: unknown) {
+  return (
+    normalizeConfigurationMode(mode) === PRODUCT_TYPE_FIELDS_CONFIGURATION_MODE
+  );
+}
+
+function normalizeSectionHeadingName(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 }
 
 function hasAtLeastOneCompatibleModel(compatible: CompatibilityGroup[]) {
@@ -490,10 +530,103 @@ function validateObjectIdArray(
 
 function normalizeDynamicFieldPrimitive(value: unknown) {
   if (typeof value === "string") {
-    return value.trim();
+    const normalized = value.trim();
+    return normalized ? normalized : null;
   }
 
-  return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  return null;
+}
+
+function isDynamicUnitValue(value: unknown): value is DynamicUnitValue {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "value" in (value as Record<string, unknown>)
+  );
+}
+
+function isVariationMatrixFieldKey(value?: string | null) {
+  return normalizeProductTypeFieldKey(value) === DYNAMIC_VARIATION_MATRIX_FIELD_KEY;
+}
+
+function normalizeDynamicUnitValue(value: unknown) {
+  if (!isDynamicUnitValue(value)) {
+    return null;
+  }
+
+  const normalizedValue = normalizeDynamicFieldPrimitive(value.value);
+
+  if (normalizedValue === null) {
+    return null;
+  }
+
+  const unit = norm(value.unit);
+
+  return {
+    value: normalizedValue,
+    ...(unit ? { unit } : {}),
+  };
+}
+
+function normalizeDynamicVariationMatrixCellValue(value: unknown) {
+  const normalizedUnitValue = normalizeDynamicUnitValue(value);
+
+  if (normalizedUnitValue) {
+    return normalizedUnitValue;
+  }
+
+  return normalizeDynamicFieldPrimitive(value);
+}
+
+function normalizeDynamicVariationMatrixRow(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = value as DynamicVariationMatrixRow;
+  const comboKey = norm(candidate.comboKey);
+
+  if (!comboKey) {
+    return null;
+  }
+
+  const dimensions = Object.entries(candidate.dimensions || {}).reduce<
+    Record<string, unknown>
+  >((acc, [key, rawValue]) => {
+    const normalizedKey = normalizeProductTypeFieldKey(key);
+    const normalizedValue = normalizeDynamicVariationMatrixCellValue(rawValue);
+
+    if (normalizedKey && normalizedValue !== null) {
+      acc[normalizedKey] = normalizedValue;
+    }
+
+    return acc;
+  }, {});
+
+  const values = Object.entries(candidate.values || {}).reduce<Record<string, unknown>>(
+    (acc, [key, rawValue]) => {
+      const normalizedKey = normalizeProductTypeFieldKey(key);
+      const normalizedValue = normalizeDynamicFieldPrimitive(rawValue);
+
+      if (normalizedKey && normalizedValue !== null) {
+        acc[normalizedKey] = normalizedValue;
+      }
+
+      return acc;
+    },
+    {}
+  );
+
+  return {
+    comboKey,
+    dimensions,
+    values,
+  };
 }
 
 function normalizeDynamicFields(value: unknown): DynamicFieldMap {
@@ -570,17 +703,44 @@ function normalizeDynamicFileValue(value: unknown): DynamicFileValue | null {
 
 function hasMeaningfulDynamicProductValue(value: unknown) {
   if (Array.isArray(value)) {
-    return value.length > 0;
+    return value.some((item) => {
+      if (normalizeDynamicFileValue(item)) {
+        const fileValue = normalizeDynamicFileValue(item);
+        return Boolean(
+          fileValue?.url ||
+            fileValue?.publicId ||
+            fileValue?.fileName ||
+            fileValue?.uploadField
+        );
+      }
+
+      if (normalizeDynamicUnitValue(item)) {
+        return hasMeaningfulDynamicValue(normalizeDynamicUnitValue(item)?.value);
+      }
+
+      if (normalizeDynamicVariationMatrixRow(item)) {
+        return true;
+      }
+
+      return hasMeaningfulDynamicValue(normalizeDynamicFieldPrimitive(item));
+    });
   }
 
   if (value && typeof value === "object") {
     const fileValue = normalizeDynamicFileValue(value);
-    return Boolean(
-      fileValue?.url ||
-        fileValue?.publicId ||
-        fileValue?.fileName ||
-        fileValue?.uploadField
-    );
+
+    if (fileValue) {
+      return Boolean(
+        fileValue.url ||
+          fileValue.publicId ||
+          fileValue.fileName ||
+          fileValue.uploadField
+      );
+    }
+
+    if (normalizeDynamicUnitValue(value)) {
+      return hasMeaningfulDynamicValue(normalizeDynamicUnitValue(value)?.value);
+    }
   }
 
   return hasMeaningfulDynamicValue(value);
@@ -588,9 +748,37 @@ function hasMeaningfulDynamicProductValue(value: unknown) {
 
 function normalizeDynamicProductFieldValue(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value
-      .map((item) => norm(item))
+    if (value.length === 0) {
+      return [];
+    }
+
+    const normalizedFileValues = value
+      .map((item) => normalizeDynamicFileValue(item))
       .filter(Boolean);
+
+    if (normalizedFileValues.length === value.length && normalizedFileValues.length > 0) {
+      return normalizedFileValues;
+    }
+
+    const normalizedUnitValues = value
+      .map((item) => normalizeDynamicUnitValue(item))
+      .filter(Boolean);
+
+    if (normalizedUnitValues.length === value.length && normalizedUnitValues.length > 0) {
+      return normalizedUnitValues;
+    }
+
+    const normalizedVariationRows = value
+      .map((item) => normalizeDynamicVariationMatrixRow(item))
+      .filter(Boolean);
+
+    if (normalizedVariationRows.length === value.length && normalizedVariationRows.length > 0) {
+      return normalizedVariationRows;
+    }
+
+    return value
+      .map((item) => normalizeDynamicFieldPrimitive(item))
+      .filter((item) => item !== null);
   }
 
   const fileValue = normalizeDynamicFileValue(value);
@@ -714,6 +902,10 @@ function parseDynamicFieldFileUploadMeta(
       fieldId: norm(item?.fieldId),
       key: normalizeProductTypeFieldKey(item?.key),
       uploadField: norm(item?.uploadField),
+      itemIndex:
+        Number.isInteger(Number(item?.itemIndex)) && Number(item?.itemIndex) >= 0
+          ? Number(item?.itemIndex)
+          : undefined,
     }))
     .filter((item) => item.uploadField && (item.fieldId || item.key));
 }
@@ -738,20 +930,246 @@ async function attachDynamicFieldFileUploads(params: {
 
     const file = files[0];
     const uploaded = await uploadSingleFile(file);
+    const nextFileValue = {
+      url: uploaded.url,
+      publicId: uploaded.publicId,
+      fileName: file.originalname,
+      mimeType: file.mimetype,
+    };
+
+    if (meta.itemIndex !== undefined) {
+      const current = getDynamicFieldLookupValue(params.lookup, {
+        fieldId: meta.fieldId,
+        key: meta.key,
+      });
+      const nextItems = Array.isArray(current?.value) ? [...current.value] : [];
+
+      nextItems[meta.itemIndex] = nextFileValue;
+
+      setDynamicFieldLookupValue(params.lookup, {
+        fieldId: meta.fieldId,
+        key: meta.key,
+        entry: {
+          value: nextItems.filter((item) => hasMeaningfulDynamicProductValue(item)),
+        },
+      });
+      continue;
+    }
 
     setDynamicFieldLookupValue(params.lookup, {
       fieldId: meta.fieldId,
       key: meta.key,
       entry: {
-        value: {
-          url: uploaded.url,
-          publicId: uploaded.publicId,
-          fileName: file.originalname,
-          mimeType: file.mimetype,
-        },
+        value: nextFileValue,
       },
     });
   }
+}
+
+function validateDynamicFieldUnit(
+  field: ProductTypeFieldDefinition,
+  unit: string
+) {
+  if (!field.hasUnit) {
+    return "";
+  }
+
+  if (!unit) {
+    return `${field.label} unit is required`;
+  }
+
+  if (
+    Array.isArray(field.unitOptions) &&
+    field.unitOptions.length > 0 &&
+    !field.unitOptions.includes(unit)
+  ) {
+    return `${field.label} has an invalid unit`;
+  }
+
+  return "";
+}
+
+function normalizeScalarDynamicFieldValue(
+  field: ProductTypeFieldDefinition,
+  value: unknown,
+  unit = ""
+): { value?: unknown; error?: string } {
+  const normalizedUnitError = validateDynamicFieldUnit(field, unit);
+
+  if (normalizedUnitError) {
+    return { error: normalizedUnitError };
+  }
+
+  if (field.inputType === "number") {
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue)) {
+      return { error: `${field.label} must be a valid number` };
+    }
+
+    return { value: numericValue };
+  }
+
+  if (field.inputType === "select" || field.inputType === "radio") {
+    const optionValue = norm(value);
+
+    if (
+      Array.isArray(field.options) &&
+      field.options.length > 0 &&
+      !field.options.includes(optionValue)
+    ) {
+      return { error: `${field.label} has an invalid option` };
+    }
+
+    return { value: optionValue };
+  }
+
+  if (field.inputType === "checkbox" || field.inputType === "boolean") {
+    return {
+      value:
+        typeof value === "boolean"
+          ? value
+          : ["true", "1", "yes", "on"].includes(norm(value).toLowerCase()),
+    };
+  }
+
+  if (field.inputType === "date") {
+    const dateValue = norm(value);
+
+    if (Number.isNaN(new Date(dateValue).getTime())) {
+      return { error: `${field.label} must be a valid date` };
+    }
+
+    return { value: dateValue };
+  }
+
+  const primitiveValue = normalizeDynamicFieldPrimitive(value);
+
+  if (primitiveValue === null) {
+    return { error: `${field.label} has an invalid value` };
+  }
+
+  return { value: primitiveValue };
+}
+
+function normalizeDynamicFieldValueByDefinition(
+  field: ProductTypeFieldDefinition,
+  entry: DynamicFieldValue | undefined
+): { value?: unknown; unit?: string; error?: string } {
+  const rawValue = normalizeDynamicProductFieldValue(entry?.value);
+  const unit = norm(entry?.unit);
+
+  if (field.inputType === "multiSelect") {
+    const values = Array.isArray(rawValue)
+      ? rawValue.map((item) => norm(item)).filter(Boolean)
+      : typeof rawValue === "string"
+        ? rawValue
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [];
+
+    if (
+      Array.isArray(field.options) &&
+      field.options.length > 0 &&
+      values.some((value) => !field.options?.includes(value))
+    ) {
+      return { error: `${field.label} has an invalid option` };
+    }
+
+    return { value: values };
+  }
+
+  if (field.inputType === "file") {
+    if (field.addMore) {
+      if (!Array.isArray(rawValue)) {
+        return { error: `${field.label} file upload is invalid` };
+      }
+
+      const normalizedFiles = rawValue
+        .map((item) => normalizeDynamicFileValue(item))
+        .filter(Boolean) as DynamicFileValue[];
+
+      if (
+        normalizedFiles.length !== rawValue.length ||
+        normalizedFiles.some((fileValue) => !fileValue.url)
+      ) {
+        return { error: `${field.label} file upload is invalid` };
+      }
+
+      return { value: normalizedFiles };
+    }
+
+    const fileValue = normalizeDynamicFileValue(rawValue);
+
+    if (!fileValue?.url) {
+      return { error: `${field.label} file upload is invalid` };
+    }
+
+    return { value: fileValue };
+  }
+
+  if (field.addMore) {
+    if (!Array.isArray(rawValue)) {
+      return { error: `${field.label} must contain multiple values` };
+    }
+
+    if (field.hasUnit) {
+      const normalizedUnitValues: Array<{ value: unknown; unit?: string }> = [];
+
+      for (const item of rawValue) {
+        const normalizedUnitValue = normalizeDynamicUnitValue(item);
+
+        if (!normalizedUnitValue) {
+          return { error: `${field.label} has an invalid value` };
+        }
+
+        const result = normalizeScalarDynamicFieldValue(
+          field,
+          normalizedUnitValue.value,
+          norm(normalizedUnitValue.unit)
+        );
+
+        if (result.error) {
+          return { error: result.error };
+        }
+
+        normalizedUnitValues.push({
+          value: result.value,
+          ...(norm(normalizedUnitValue.unit)
+            ? { unit: norm(normalizedUnitValue.unit) }
+            : {}),
+        });
+      }
+
+      return { value: normalizedUnitValues };
+    }
+
+    const normalizedItems: unknown[] = [];
+
+    for (const item of rawValue) {
+      const result = normalizeScalarDynamicFieldValue(field, item);
+
+      if (result.error) {
+        return { error: result.error };
+      }
+
+      normalizedItems.push(result.value);
+    }
+
+    return { value: normalizedItems };
+  }
+
+  const scalarResult = normalizeScalarDynamicFieldValue(field, rawValue, unit);
+
+  if (scalarResult.error) {
+    return { error: scalarResult.error };
+  }
+
+  return {
+    value: scalarResult.value,
+    ...(field.hasUnit && unit ? { unit } : {}),
+  };
 }
 
 async function validateProductTypeContext(
@@ -844,6 +1262,33 @@ async function validateAndNormalizeDynamicFields(
   const sectionHeadings = Array.isArray(builder.sectionHeadings)
     ? (builder.sectionHeadings as ProductTypeFieldBuilderSection[])
     : [];
+  const offerFieldMap = new Map<string, ProductTypeFieldDefinition>();
+
+  for (const section of sectionHeadings) {
+    if (
+      section?.isActive !== false &&
+      normalizeSectionHeadingName(section?.headingName) ===
+        normalizeSectionHeadingName(PRODUCT_OFFER_SECTION_HEADING)
+    ) {
+      for (const group of Array.isArray(section?.groups) ? section.groups : []) {
+        if (group?.isActive === false) {
+          continue;
+        }
+
+        for (const field of Array.isArray(group?.fields) ? group.fields : []) {
+          if (field?.active === false) {
+            continue;
+          }
+
+          const normalizedKey = normalizeProductTypeFieldKey(field?.key);
+
+          if (DYNAMIC_VARIATION_OFFER_FIELD_KEYS.has(normalizedKey)) {
+            offerFieldMap.set(normalizedKey, field);
+          }
+        }
+      }
+    }
+  }
 
   for (const section of sectionHeadings) {
     if (section?.isActive === false) {
@@ -852,6 +1297,11 @@ async function validateAndNormalizeDynamicFields(
 
     const normalizedGroups: DynamicProductFieldValueGroup[] = [];
     const groups = Array.isArray(section?.groups) ? section.groups : [];
+    const isVariationSection =
+      normalizeSectionHeadingName(section?.headingName) ===
+      normalizeSectionHeadingName(PRODUCT_VARIATION_SECTION_HEADING);
+    const variationDimensionFields = new Map<string, ProductTypeFieldDefinition>();
+    let hasVariationDimensions = false;
 
     for (const group of groups) {
       if (group?.isActive === false) {
@@ -871,9 +1321,8 @@ async function validateAndNormalizeDynamicFields(
           fieldId,
           key: field?.key,
         });
-        let nextValue = normalizeDynamicProductFieldValue(entry?.value);
-        const unit = norm(entry?.unit);
-        const hasValue = hasMeaningfulDynamicProductValue(nextValue);
+        const rawValue = normalizeDynamicProductFieldValue(entry?.value);
+        const hasValue = hasMeaningfulDynamicProductValue(rawValue);
 
         if (field.required && !hasValue) {
           res.status(400).json({
@@ -887,130 +1336,36 @@ async function validateAndNormalizeDynamicFields(
           continue;
         }
 
-        if (field.inputType === "number") {
-          const numericValue = Number(nextValue);
+        const normalizedEntry = normalizeDynamicFieldValueByDefinition(
+          field,
+          entry
+        );
 
-          if (!Number.isFinite(numericValue)) {
-            res.status(400).json({
-              success: false,
-              message: `${field.label} must be a valid number`,
-            });
-            return null;
-          }
-
-          nextValue = numericValue;
-        }
-
-        if (field.inputType === "select" || field.inputType === "radio") {
-          if (
-            Array.isArray(field.options) &&
-            field.options.length > 0 &&
-            !field.options.includes(String(nextValue))
-          ) {
-            res.status(400).json({
-              success: false,
-              message: `${field.label} has an invalid option`,
-            });
-            return null;
-          }
-        }
-
-        if (field.inputType === "multiSelect") {
-          const values = Array.isArray(nextValue)
-            ? nextValue.map((item) => norm(item)).filter(Boolean)
-            : typeof nextValue === "string"
-              ? nextValue
-                  .split(",")
-                  .map((item) => item.trim())
-                  .filter(Boolean)
-              : [];
-
-          if (field.required && values.length === 0) {
-            res.status(400).json({
-              success: false,
-              message: `${field.label} is required`,
-            });
-            return null;
-          }
-
-          if (
-            Array.isArray(field.options) &&
-            field.options.length > 0 &&
-            values.some((value) => !field.options?.includes(value))
-          ) {
-            res.status(400).json({
-              success: false,
-              message: `${field.label} has an invalid option`,
-            });
-            return null;
-          }
-
-          nextValue = values;
-        }
-
-        if (field.inputType === "checkbox" || field.inputType === "boolean") {
-          nextValue =
-            typeof nextValue === "boolean"
-              ? nextValue
-              : ["true", "1", "yes", "on"].includes(
-                  String(nextValue).trim().toLowerCase()
-                );
-        }
-
-        if (
-          field.inputType === "date" &&
-          Number.isNaN(new Date(String(nextValue)).getTime())
-        ) {
+        if (normalizedEntry.error) {
           res.status(400).json({
             success: false,
-            message: `${field.label} must be a valid date`,
+            message: normalizedEntry.error,
           });
           return null;
-        }
-
-        if (field.inputType === "file") {
-          const fileValue = normalizeDynamicFileValue(nextValue);
-
-          if (!fileValue?.url) {
-            res.status(400).json({
-              success: false,
-              message: `${field.label} file upload is invalid`,
-            });
-            return null;
-          }
-
-          nextValue = fileValue;
-        }
-
-        if (field.hasUnit) {
-          if (!unit) {
-            res.status(400).json({
-              success: false,
-              message: `${field.label} unit is required`,
-            });
-            return null;
-          }
-
-          if (
-            Array.isArray(field.unitOptions) &&
-            field.unitOptions.length > 0 &&
-            !field.unitOptions.includes(unit)
-          ) {
-            res.status(400).json({
-              success: false,
-              message: `${field.label} has an invalid unit`,
-            });
-            return null;
-          }
         }
 
         normalizedFields.push({
           ...(fieldId ? { fieldId } : {}),
           label: field.label,
           key: normalizeProductTypeFieldKey(field.key),
-          value: nextValue,
-          ...(field.hasUnit && unit ? { unit } : {}),
+          value: normalizedEntry.value,
+          ...(field.hasUnit && normalizedEntry.unit
+            ? { unit: normalizedEntry.unit }
+            : {}),
         });
+
+        if (isVariationSection && field.addMore) {
+          variationDimensionFields.set(
+            normalizeProductTypeFieldKey(field.key),
+            field
+          );
+          hasVariationDimensions = true;
+        }
       }
 
       if (normalizedFields.length > 0) {
@@ -1020,6 +1375,191 @@ async function validateAndNormalizeDynamicFields(
           fields: normalizedFields,
         });
       }
+    }
+
+    if (isVariationSection && hasVariationDimensions) {
+      const matrixEntry = getDynamicFieldLookupValue(lookup, {
+        key: DYNAMIC_VARIATION_MATRIX_FIELD_KEY,
+      });
+      const matrixValue = normalizeDynamicProductFieldValue(matrixEntry?.value);
+
+      if (!Array.isArray(matrixValue) || matrixValue.length === 0) {
+        res.status(400).json({
+          success: false,
+          message: "Variation combinations are required",
+        });
+        return null;
+      }
+
+      const matrixRows = matrixValue.filter(
+        (item): item is DynamicVariationMatrixRow =>
+          Boolean(item && typeof item === "object" && !Array.isArray(item))
+      );
+
+      if (matrixRows.length !== matrixValue.length) {
+        res.status(400).json({
+          success: false,
+          message: "Variation combinations are invalid",
+        });
+        return null;
+      }
+
+      const normalizedMatrixRows: DynamicVariationMatrixRow[] = [];
+
+      for (const row of matrixRows) {
+        const comboKey = norm(row.comboKey);
+
+        if (!comboKey) {
+          res.status(400).json({
+            success: false,
+            message: "Variation combinations are invalid",
+          });
+          return null;
+        }
+
+        const normalizedDimensions = Object.entries(
+          row.dimensions || {}
+        ).reduce<Record<string, unknown>>((acc, [rawKey, rawValue]) => {
+          const normalizedKey = normalizeProductTypeFieldKey(rawKey);
+
+          if (normalizedKey) {
+            acc[normalizedKey] = rawValue;
+          }
+
+          return acc;
+        }, {});
+
+        const normalizedRowValues = Object.entries(row.values || {}).reduce<
+          Record<string, unknown>
+        >((acc, [rawKey, rawValue]) => {
+          const normalizedKey = normalizeProductTypeFieldKey(rawKey);
+
+          if (
+            normalizedKey &&
+            DYNAMIC_VARIATION_OFFER_FIELD_KEYS.has(normalizedKey) &&
+            !offerFieldMap.has(normalizedKey)
+          ) {
+            const normalizedValue = normalizeDynamicFieldPrimitive(rawValue);
+
+            if (normalizedValue !== null) {
+              acc[normalizedKey] = normalizedValue;
+            }
+          }
+
+          return acc;
+        }, {});
+
+        for (const [fieldKey, fieldDefinition] of variationDimensionFields) {
+          const dimensionValue = normalizedDimensions[fieldKey];
+
+          if (dimensionValue === undefined) {
+            res.status(400).json({
+              success: false,
+              message: `${fieldDefinition.label} is required for each variation row`,
+            });
+            return null;
+          }
+
+          if (fieldDefinition.hasUnit) {
+            const normalizedUnitValue =
+              normalizeDynamicUnitValue(dimensionValue);
+
+            if (!normalizedUnitValue) {
+              res.status(400).json({
+                success: false,
+                message: `${fieldDefinition.label} has an invalid value`,
+              });
+              return null;
+            }
+
+            const result = normalizeScalarDynamicFieldValue(
+              fieldDefinition,
+              normalizedUnitValue.value,
+              norm(normalizedUnitValue.unit)
+            );
+
+            if (result.error) {
+              res.status(400).json({
+                success: false,
+                message: result.error,
+              });
+              return null;
+            }
+
+            normalizedDimensions[fieldKey] = {
+              value: result.value,
+              ...(norm(normalizedUnitValue.unit)
+                ? { unit: norm(normalizedUnitValue.unit) }
+                : {}),
+            };
+            continue;
+          }
+
+          const result = normalizeScalarDynamicFieldValue(
+            fieldDefinition,
+            dimensionValue
+          );
+
+          if (result.error) {
+            res.status(400).json({
+              success: false,
+              message: result.error,
+            });
+            return null;
+          }
+
+          normalizedDimensions[fieldKey] = result.value;
+        }
+
+        for (const [fieldKey, fieldDefinition] of offerFieldMap.entries()) {
+          const cellValue = row.values?.[fieldKey];
+          const cellHasValue = hasMeaningfulDynamicProductValue(cellValue);
+
+          if (fieldDefinition.required && !cellHasValue) {
+            res.status(400).json({
+              success: false,
+              message: `${fieldDefinition.label} is required for each variation row`,
+            });
+            return null;
+          }
+
+          if (!cellHasValue) {
+            continue;
+          }
+
+          const result = normalizeScalarDynamicFieldValue(
+            fieldDefinition,
+            cellValue
+          );
+
+          if (result.error) {
+            res.status(400).json({
+              success: false,
+              message: result.error,
+            });
+            return null;
+          }
+
+          normalizedRowValues[fieldKey] = result.value;
+        }
+
+        normalizedMatrixRows.push({
+          comboKey,
+          dimensions: normalizedDimensions,
+          values: normalizedRowValues,
+        });
+      }
+
+      normalizedGroups.push({
+        groupName: DYNAMIC_VARIATION_META_GROUP_NAME,
+        fields: [
+          {
+            label: "Variation Matrix",
+            key: DYNAMIC_VARIATION_MATRIX_FIELD_KEY,
+            value: normalizedMatrixRows,
+          },
+        ],
+      });
     }
 
     if (normalizedGroups.length > 0) {
@@ -1756,6 +2296,15 @@ function sanitizePayloadByConfigurationMode<
 
   payload.configurationMode = configurationMode;
 
+  if (configurationMode === "productTypeFields") {
+    delete payload.compatible;
+    delete payload.variant;
+    delete payload.images;
+    delete payload.videos;
+    delete payload.productInformation;
+    return payload;
+  }
+
   if (configurationMode === "variant") {
     delete payload.compatible;
     delete payload.images;
@@ -1790,7 +2339,13 @@ function buildUnsetByConfigurationMode(
 ) {
   const $unset: Record<string, 1> = {};
 
-  if (configurationMode === "variant") {
+  if (configurationMode === "productTypeFields") {
+    $unset.compatible = 1;
+    $unset.variant = 1;
+    $unset.images = 1;
+    $unset.videos = 1;
+    $unset.productInformation = 1;
+  } else if (configurationMode === "variant") {
     $unset.compatible = 1;
     $unset.images = 1;
     $unset.videos = 1;
@@ -1834,6 +2389,10 @@ function validateConfigurationModePayload(
   const productInformation = Array.isArray(payload.productInformation)
     ? payload.productInformation
     : [];
+
+  if (configurationMode === "productTypeFields") {
+    return true;
+  }
 
   if (
     (configurationMode === "variant" ||
@@ -1885,6 +2444,9 @@ function validateCreatePayload(
   const compatibilityMode = isCompatibilityConfigurationMode(
     payload.configurationMode
   );
+  const productTypeFieldsMode = isProductTypeFieldsConfigurationMode(
+    payload.configurationMode
+  );
 
   if (!payload.itemName || !payload.sku) {
     res.status(400).json({
@@ -1908,7 +2470,7 @@ function validateCreatePayload(
 
   if (
     !validateOptionalObjectId(payload.brandId, "brandId", res, {
-      required: true,
+      required: !productTypeFieldsMode,
       customRequiredMessage: "Please select product brand",
     })
   ) {
@@ -1930,7 +2492,7 @@ function validateCreatePayload(
   */
   if (
     !validateOptionalObjectId(payload.modelId, "modelId", res, {
-      required: !compatibilityMode,
+      required: !compatibilityMode && !productTypeFieldsMode,
       customRequiredMessage: "Please select model",
     })
   ) {
@@ -1980,6 +2542,8 @@ function validateUpdatePayload(
 
   const compatibilityMode =
     isCompatibilityConfigurationMode(finalConfigurationMode);
+  const productTypeFieldsMode =
+    isProductTypeFieldsConfigurationMode(finalConfigurationMode);
 
   const singleObjectIdFields = [
     "categoryId",
@@ -1999,7 +2563,7 @@ function validateUpdatePayload(
   if (
     payload.brandId !== undefined &&
     !validateOptionalObjectId(payload.brandId, "brandId", res, {
-      required: true,
+      required: !productTypeFieldsMode,
       customRequiredMessage: "Please select product brand",
     })
   ) {
@@ -2009,7 +2573,7 @@ function validateUpdatePayload(
   if (
     payload.modelId !== undefined &&
     !validateOptionalObjectId(payload.modelId, "modelId", res, {
-      required: !compatibilityMode,
+      required: !compatibilityMode && !productTypeFieldsMode,
       customRequiredMessage: "Please select model",
     })
   ) {

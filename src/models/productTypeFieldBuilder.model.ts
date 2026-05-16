@@ -58,6 +58,10 @@ const ProductTypeBuilderFieldSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    addMore: {
+      type: Boolean,
+      default: false,
+    },
     hasUnit: {
       type: Boolean,
       default: false,
