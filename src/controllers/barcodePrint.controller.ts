@@ -51,6 +51,24 @@ const clean = (value: unknown) => String(value || "").trim();
 
 const normalizeUpper = (value: unknown) => String(value || "").trim().toUpperCase();
 
+const normalizeShopType = (value: unknown) => {
+  const shopType = normalizeUpper(value);
+
+  if (shopType === "BRANCH_RETAIL_SHOP" || shopType === "BRANCH") {
+    return "RETAIL_BRANCH_SHOP";
+  }
+
+  if (shopType === "MAIN") {
+    return "WAREHOUSE_RETAIL_SHOP";
+  }
+
+  if (shopType === "WHOLESALE") {
+    return "WHOLESALE_SHOP";
+  }
+
+  return shopType;
+};
+
 const getNumber = (value: unknown) => {
   const num = Number(value || 0);
   return Number.isFinite(num) ? num : 0;
@@ -169,7 +187,7 @@ const ensureBarcodeShopAccess = async (req: AuthRequest, shopId: string) => {
     return { ok: false as const, status: 403, message: "Shop is deactivated" };
   }
 
-  const shopType = normalizeUpper((shop as any).shopType);
+  const shopType = normalizeShopType((shop as any).shopType);
 
   if (
     !BARCODE_ALLOWED_SHOP_TYPES.includes(

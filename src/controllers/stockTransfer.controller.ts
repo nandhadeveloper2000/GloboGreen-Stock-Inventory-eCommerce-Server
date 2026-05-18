@@ -242,8 +242,26 @@ export async function createStockTransfer(req: Request, res: Response) {
     const fromShop = fromShopAccess.shop;
     const toShop = toShopAccess.shop;
 
-    const fromShopType = normalizeUpper((fromShop as any).shopType);
-    const toShopType = normalizeUpper((toShop as any).shopType);
+    const normalizeShopType = (value: unknown) => {
+      const shopType = normalizeUpper(value);
+
+      if (shopType === "BRANCH_RETAIL_SHOP" || shopType === "BRANCH") {
+        return "RETAIL_BRANCH_SHOP";
+      }
+
+      if (shopType === "MAIN") {
+        return "WAREHOUSE_RETAIL_SHOP";
+      }
+
+      if (shopType === "WHOLESALE") {
+        return "WHOLESALE_SHOP";
+      }
+
+      return shopType;
+    };
+
+    const fromShopType = normalizeShopType((fromShop as any).shopType);
+    const toShopType = normalizeShopType((toShop as any).shopType);
 
     const isForward = fromShopType === "WAREHOUSE_RETAIL_SHOP" && toShopType === "RETAIL_BRANCH_SHOP";
     const isReverse = fromShopType === "RETAIL_BRANCH_SHOP" && toShopType === "WAREHOUSE_RETAIL_SHOP";

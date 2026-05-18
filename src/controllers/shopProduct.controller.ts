@@ -46,8 +46,26 @@ function normalizePricingType(value: unknown): ShopPricingType {
   return normalizeUpper(value) === "BULK" ? "BULK" : "SINGLE";
 }
 
+function normalizeShopType(value: unknown) {
+  const shopType = normalizeUpper(value);
+
+  if (shopType === "BRANCH_RETAIL_SHOP" || shopType === "BRANCH") {
+    return "RETAIL_BRANCH_SHOP";
+  }
+
+  if (shopType === "MAIN") {
+    return "WAREHOUSE_RETAIL_SHOP";
+  }
+
+  if (shopType === "WHOLESALE") {
+    return "WHOLESALE_SHOP";
+  }
+
+  return shopType;
+}
+
 function isWholesaleShopType(shopType: unknown) {
-  return normalizeUpper(shopType) === "WHOLESALE_SHOP";
+  return normalizeShopType(shopType) === "WHOLESALE_SHOP";
 }
 
 function getAllowedPricingTypesByShopType(shopType: unknown): ShopPricingType[] {

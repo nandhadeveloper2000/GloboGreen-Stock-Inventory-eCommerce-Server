@@ -70,7 +70,13 @@ export const CreateShopSchema = z.object({
   name: z.string().trim().optional(),
   mobile: zMobile,
   shopType: z.enum(
-    ["WAREHOUSE_RETAIL_SHOP", "RETAIL_BRANCH_SHOP", "WHOLESALE_SHOP"] as const,
+    [
+      "WAREHOUSE_RETAIL_SHOP",
+      "RETAIL_BRANCH_SHOP",
+      "WHOLESALE_SHOP",
+      "MAIN",
+      "BRANCH",
+    ] as const,
     { error: "shopType is required" }
   ),
   billingType: z.enum(["GST", "NON_GST"]).default("GST"),

@@ -70,6 +70,18 @@ function isShopStaffRole(role?: Role) {
 function normalizeShopType(value: any) {
   const shopType = normUpper(value || "WAREHOUSE_RETAIL_SHOP");
 
+  if (shopType === "BRANCH_RETAIL_SHOP" || shopType === "BRANCH") {
+    return "RETAIL_BRANCH_SHOP";
+  }
+
+  if (shopType === "MAIN") {
+    return "WAREHOUSE_RETAIL_SHOP";
+  }
+
+  if (shopType === "WHOLESALE") {
+    return "WHOLESALE_SHOP";
+  }
+
   if (!SHOP_TYPES.includes(shopType as any)) return null;
 
   return shopType;
