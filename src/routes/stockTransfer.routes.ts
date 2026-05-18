@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import { CreateStockTransferSchema } from "../schemas";
 import {
   createStockTransfer,
   getStockTransfer,
@@ -27,7 +30,7 @@ const CREATE_ROLES = [
 ] as const;
 
 router.get("/", auth, requireRoles(...VIEW_ROLES), listStockTransfers);
-router.get("/:id", auth, requireRoles(...VIEW_ROLES), getStockTransfer);
-router.post("/", auth, requireRoles(...CREATE_ROLES), createStockTransfer);
+router.get("/:id", auth, requireRoles(...VIEW_ROLES), validateObjectId("id"), getStockTransfer);
+router.post("/", auth, requireRoles(...CREATE_ROLES), validate(CreateStockTransferSchema), createStockTransfer);
 
 export default router;

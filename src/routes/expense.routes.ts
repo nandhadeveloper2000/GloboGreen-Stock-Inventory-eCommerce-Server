@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import { CreateExpenseSchema } from "../schemas";
 import {
   createExpense,
   getExpenseById,
@@ -13,7 +16,7 @@ const VIEW_ROLES = ["SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"]
 const CREATE_ROLES = ["SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR"] as const;
 
 router.get("/", auth, requireRoles(...VIEW_ROLES), listExpenses);
-router.post("/", auth, requireRoles(...CREATE_ROLES), createExpense);
-router.get("/:id", auth, requireRoles(...VIEW_ROLES), getExpenseById);
+router.post("/", auth, requireRoles(...CREATE_ROLES), validate(CreateExpenseSchema), createExpense);
+router.get("/:id", auth, requireRoles(...VIEW_ROLES), validateObjectId("id"), getExpenseById);
 
 export default router;

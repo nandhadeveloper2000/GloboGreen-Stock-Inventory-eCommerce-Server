@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import { requireShopAccess } from "../middlewares/requireShopAccess";
+import { CreateVendorSchema, UpdateVendorSchema } from "../schemas";
 import {
   createVendor,
   deleteVendor,
@@ -54,41 +58,16 @@ router.get("/", auth, requireRoles(...VIEW_ROLES), listVendors);
  * Optional shop-wise clean route
  * GET /api/vendors/shop/:shopId?q=abc&status=ACTIVE
  */
-router.get("/shop/:shopId", auth, requireRoles(...VIEW_ROLES), listVendors);
+router.get("/shop/:shopId", auth, requireRoles(...VIEW_ROLES), validateObjectId("shopId"), requireShopAccess("shopId"), listVendors);
 
-/**
- * Create vendor
- * POST /api/vendors
- */
-router.post("/", auth, requireRoles(...CREATE_ROLES), createVendor);
+router.post("/", auth, requireRoles(...CREATE_ROLES), validate(CreateVendorSchema), createVendor);
 
-/**
- * Get single vendor
- * GET /api/vendors/:id
- */
-router.get("/:id", auth, requireRoles(...VIEW_ROLES), getVendorById);
+router.get("/:id", auth, requireRoles(...VIEW_ROLES), validateObjectId("id"), getVendorById);
 
-/**
- * Update vendor
- * PUT /api/vendors/:id
- */
-router.put("/:id", auth, requireRoles(...UPDATE_ROLES), updateVendor);
+router.put("/:id", auth, requireRoles(...UPDATE_ROLES), validateObjectId("id"), validate(UpdateVendorSchema), updateVendor);
 
-/**
- * Update status only
- * PATCH /api/vendors/:id/status
- */
-router.patch(
-  "/:id/status",
-  auth,
-  requireRoles(...UPDATE_ROLES),
-  updateVendorStatus
-);
+router.patch("/:id/status", auth, requireRoles(...UPDATE_ROLES), validateObjectId("id"), updateVendorStatus);
 
-/**
- * Soft delete vendor
- * DELETE /api/vendors/:id
- */
-router.delete("/:id", auth, requireRoles(...DELETE_ROLES), deleteVendor);
+router.delete("/:id", auth, requireRoles(...DELETE_ROLES), validateObjectId("id"), deleteVendor);
 
 export default router;

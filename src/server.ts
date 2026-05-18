@@ -4,7 +4,7 @@ import mongoose from "mongoose";
 import app from "./app";
 import { connectDB } from "./config/db";
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 4000;
 
 const server = http.createServer(app);
 

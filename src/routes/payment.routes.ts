@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import { CreatePaymentSchema } from "../schemas";
 import {
   listPayments,
   createPayment,
@@ -19,9 +22,9 @@ const DELETE_ROLES = ["MASTER_ADMIN", "MANAGER", "SHOP_OWNER"] as const;
 
 router.get("/", auth, requireRoles(...VIEW_ROLES), listPayments);
 router.get("/summary", auth, requireRoles(...VIEW_ROLES), getPaymentSummary);
-router.get("/:id", auth, requireRoles(...VIEW_ROLES), getPaymentById);
-router.post("/", auth, requireRoles(...CREATE_ROLES), createPayment);
-router.put("/:id", auth, requireRoles(...UPDATE_ROLES), updatePayment);
-router.delete("/:id", auth, requireRoles(...DELETE_ROLES), deletePayment);
+router.get("/:id", auth, requireRoles(...VIEW_ROLES), validateObjectId("id"), getPaymentById);
+router.post("/", auth, requireRoles(...CREATE_ROLES), validate(CreatePaymentSchema), createPayment);
+router.put("/:id", auth, requireRoles(...UPDATE_ROLES), validateObjectId("id"), updatePayment);
+router.delete("/:id", auth, requireRoles(...DELETE_ROLES), validateObjectId("id"), deletePayment);
 
 export default router;

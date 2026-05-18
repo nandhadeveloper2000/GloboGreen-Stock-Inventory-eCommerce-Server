@@ -4,6 +4,7 @@ import cors, { CorsOptions } from "cors";
 import hpp from "hpp";
 import routes from "./routes/routes";
 import { sanitizeMongo } from "./middlewares/sanitize.middleware";
+import { generalApiRateLimiter } from "./middlewares/rateLimit.middleware";
 
 const app = express();
 
@@ -26,9 +27,6 @@ const allowedOrigins =
   process.env.NODE_ENV === "production"
     ? envOrigins
     : Array.from(new Set([...defaultDevOrigins, ...envOrigins]));
-
-console.log("FRONTEND_URL =", process.env.FRONTEND_URL);
-console.log("allowedOrigins =", allowedOrigins);
 
 const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
@@ -71,6 +69,11 @@ app.use(express.json({ limit: "200kb" }));
 app.use(express.urlencoded({ extended: true, limit: "200kb" }));
 
 /* =========================
+   GLOBAL RATE LIMITER
+========================= */
+app.use(generalApiRateLimiter);
+
+/* =========================
    SANITIZE + HPP
 ========================= */
 app.use(sanitizeMongo);
@@ -95,9 +98,12 @@ app.use("/api", routes);
    404 HANDLER
 ========================= */
 app.use((req, res) => {
+  const isProduction = process.env.NODE_ENV === "production";
   res.status(404).json({
     success: false,
-    message: `Route not found: ${req.method} ${req.originalUrl}`,
+    message: isProduction
+      ? "Not found"
+      : `Route not found: ${req.method} ${req.originalUrl}`,
   });
 });
 

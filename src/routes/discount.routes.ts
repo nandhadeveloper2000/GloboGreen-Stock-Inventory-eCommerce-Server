@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import { CreateDiscountSchema } from "../schemas";
 import {
   listDiscounts,
   createDiscount,
@@ -18,9 +21,9 @@ const DELETE_ROLES = ["MASTER_ADMIN", "MANAGER", "SHOP_OWNER"] as const;
 
 router.get("/", auth, requireRoles(...VIEW_ROLES), listDiscounts);
 router.get("/validate", auth, requireRoles(...VIEW_ROLES), validateDiscountCode);
-router.get("/:id", auth, requireRoles(...VIEW_ROLES), getDiscountById);
-router.post("/", auth, requireRoles(...MANAGE_ROLES), createDiscount);
-router.put("/:id", auth, requireRoles(...MANAGE_ROLES), updateDiscount);
-router.delete("/:id", auth, requireRoles(...DELETE_ROLES), deleteDiscount);
+router.get("/:id", auth, requireRoles(...VIEW_ROLES), validateObjectId("id"), getDiscountById);
+router.post("/", auth, requireRoles(...MANAGE_ROLES), validate(CreateDiscountSchema), createDiscount);
+router.put("/:id", auth, requireRoles(...MANAGE_ROLES), validateObjectId("id"), updateDiscount);
+router.delete("/:id", auth, requireRoles(...DELETE_ROLES), validateObjectId("id"), deleteDiscount);
 
 export default router;

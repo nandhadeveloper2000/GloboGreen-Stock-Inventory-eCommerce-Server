@@ -2,6 +2,9 @@ import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
 import { upload } from "../middlewares/upload";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import { CreateShopSchema, UpdateShopSchema } from "../schemas";
 import {
   createShop,
   listShops,
@@ -31,7 +34,11 @@ router.post(
     "STAFF",
     "SHOP_OWNER"
   ),
-  upload.single("frontImage"),
+  upload.fields([
+    { name: "frontImage", maxCount: 1 },
+    { name: "gstCertificate", maxCount: 1 },
+    { name: "udyamCertificate", maxCount: 1 },
+  ]),
   createShop
 );
 
@@ -66,6 +73,7 @@ router.get(
     "EMPLOYEE",
     "CUSTOMER"
   ),
+  validateObjectId("id"),
   getShop
 );
 
@@ -79,6 +87,8 @@ router.put(
     "SHOP_MANAGER",
     "SHOP_SUPERVISOR"
   ),
+  validateObjectId("id"),
+  validate(UpdateShopSchema),
   updateShop
 );
 
@@ -86,6 +96,7 @@ router.delete(
   "/:id",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SHOP_OWNER"),
+  validateObjectId("id"),
   deleteShop
 );
 

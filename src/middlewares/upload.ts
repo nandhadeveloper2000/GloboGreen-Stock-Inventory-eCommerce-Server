@@ -44,8 +44,8 @@ function createMemoryUpload(options?: MemoryUploadOptions) {
 
 export const upload = createMemoryUpload();
 
+// Products allow images + videos only — executables and other file types are rejected
 export const productMediaUpload = createMemoryUpload({
   allowVideos: true,
-  allowAnyFiles: true,
   maxFileSize: 25 * 1024 * 1024,
 });

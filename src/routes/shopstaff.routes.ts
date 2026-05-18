@@ -2,12 +2,17 @@ import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
 import { upload } from "../middlewares/upload";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import { LoginSchema, ForgotPinSchema, ResetPinSchema, ChangePinSchema } from "../schemas";
 
 import {
   loginRateLimiter,
   refreshRateLimiter,
   forgotPinRateLimiter,
   otpVerifyRateLimiter,
+  otpResendRateLimiter,
+  strictRateLimiter,
 } from "../middlewares/rateLimit.middleware";
 
 import { refreshAuthSession } from "../controllers/auth.controller";
@@ -43,11 +48,11 @@ const uploadFields = upload.fields([
 ]);
 
 /* ===================== AUTH ===================== */
-router.post("/login", loginRateLimiter, shopStaffLogin);
+router.post("/login", loginRateLimiter, validate(LoginSchema), shopStaffLogin);
 router.post("/refresh", refreshRateLimiter, refreshAuthSession);
-router.post("/forgot-pin", forgotPinRateLimiter, forgotShopStaffPin);
+router.post("/forgot-pin", forgotPinRateLimiter, validate(ForgotPinSchema), forgotShopStaffPin);
 router.post("/verify-pin-otp", otpVerifyRateLimiter, verifyShopStaffPinOtp);
-router.post("/reset-pin", otpVerifyRateLimiter, resetShopStaffPin);
+router.post("/reset-pin", otpVerifyRateLimiter, validate(ResetPinSchema), resetShopStaffPin);
 
 router.post(
   "/logout",
@@ -75,7 +80,9 @@ router.put(
 router.put(
   "/me/change-pin",
   auth,
+  strictRateLimiter,
   requireRoles("SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
+  validate(ChangePinSchema),
   changeShopStaffPin
 );
 
@@ -145,6 +152,7 @@ router.get(
   "/:id",
   auth,
   requireRoles("SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
+  validateObjectId("id"),
   getShopStaff
 );
 
@@ -152,6 +160,7 @@ router.put(
   "/:id",
   auth,
   requireRoles("SHOP_OWNER", "SHOP_MANAGER", "SHOP_SUPERVISOR", "EMPLOYEE"),
+  validateObjectId("id"),
   uploadFields,
   updateShopStaff
 );
@@ -160,6 +169,7 @@ router.put(
   "/:id/activate",
   auth,
   requireRoles("SHOP_OWNER"),
+  validateObjectId("id"),
   toggleShopStaffActive
 );
 
@@ -167,6 +177,7 @@ router.delete(
   "/:id",
   auth,
   requireRoles("SHOP_OWNER"),
+  validateObjectId("id"),
   deleteShopStaff
 );
 

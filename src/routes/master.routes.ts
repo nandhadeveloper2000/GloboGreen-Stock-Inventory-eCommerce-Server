@@ -22,20 +22,30 @@ import {
   refreshRateLimiter,
   forgotPinRateLimiter,
   otpVerifyRateLimiter,
+  strictRateLimiter,
 } from "../middlewares/rateLimit.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import {
+  LoginSchema,
+  ForgotPinSchema,
+  VerifyOtpSchema,
+  ResetPinSchema,
+  ChangePinSchema,
+} from "../schemas";
 import { refreshAuthSession } from "../controllers/auth.controller";
 
 const router = Router();
 
 /* ---------- AUTH PUBLIC ---------- */
-router.post("/login", loginRateLimiter, masterLogin);
+router.post("/login", loginRateLimiter, validate(LoginSchema), masterLogin);
 router.post("/google-login", loginRateLimiter, masterGoogleLogin);
 router.post("/refresh", refreshRateLimiter, refreshAuthSession);
-router.post("/forgot-pin", forgotPinRateLimiter, masterForgotPin);
-router.post("/reset-pin", otpVerifyRateLimiter, masterResetPin);
+router.post("/forgot-pin", forgotPinRateLimiter, validate(ForgotPinSchema), masterForgotPin);
+router.post("/reset-pin", otpVerifyRateLimiter, validate(ResetPinSchema), masterResetPin);
 
 /* ---------- PROTECTED (MASTER SELF) ---------- */
-router.post("/change-pin", auth, requireRole("MASTER_ADMIN"), masterChangePin);
+router.post("/change-pin", auth, strictRateLimiter, requireRole("MASTER_ADMIN"), validate(ChangePinSchema), masterChangePin);
 
 router.get("/me", auth, requireRole("MASTER_ADMIN"), masterMe);
 router.put("/me", auth, requireRole("MASTER_ADMIN"), masterUpdateMe);
@@ -58,8 +68,8 @@ router.delete(
 
 /* ---------- ADMIN CRUD ---------- */
 router.get("/", auth, requireRole("MASTER_ADMIN"), masterList);
-router.get("/:id", auth, requireRole("MASTER_ADMIN"), masterGetById);
-router.put("/:id", auth, requireRole("MASTER_ADMIN"), masterUpdate);
-router.delete("/:id", auth, requireRole("MASTER_ADMIN"), masterDelete);
+router.get("/:id", auth, requireRole("MASTER_ADMIN"), validateObjectId("id"), masterGetById);
+router.put("/:id", auth, requireRole("MASTER_ADMIN"), validateObjectId("id"), masterUpdate);
+router.delete("/:id", auth, requireRole("MASTER_ADMIN"), validateObjectId("id"), masterDelete);
 
 export default router;

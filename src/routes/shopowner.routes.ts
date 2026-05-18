@@ -7,7 +7,19 @@ import {
   refreshRateLimiter,
   forgotPinRateLimiter,
   otpVerifyRateLimiter,
+  strictRateLimiter,
+  otpResendRateLimiter,
 } from "../middlewares/rateLimit.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import {
+  LoginSchema,
+  ForgotPinSchema,
+  ResetPinSchema,
+  ChangePinSchema,
+  CreateShopOwnerSchema,
+  UpdateShopOwnerSchema,
+} from "../schemas";
 import { refreshAuthSession } from "../controllers/auth.controller";
 import {
   createShopOwner,
@@ -39,11 +51,11 @@ import {
 const router = Router();
 
 /* ===================== PUBLIC AUTH ===================== */
-router.post("/login", loginRateLimiter, shopOwnerLogin);
+router.post("/login", loginRateLimiter, validate(LoginSchema), shopOwnerLogin);
 router.post("/refresh", refreshRateLimiter, refreshAuthSession);
-router.post("/forgot-pin", forgotPinRateLimiter, forgotShopOwnerPin);
+router.post("/forgot-pin", forgotPinRateLimiter, validate(ForgotPinSchema), forgotShopOwnerPin);
 router.post("/verify-pin-otp", otpVerifyRateLimiter, verifyShopOwnerPinOtp);
-router.post("/reset-pin", otpVerifyRateLimiter, resetShopOwnerPin);
+router.post("/reset-pin", otpVerifyRateLimiter, validate(ResetPinSchema), resetShopOwnerPin);
 
 /* ===================== SELF ===================== */
 router.post(
@@ -70,13 +82,16 @@ router.put(
 router.put(
   "/me/change-pin",
   auth,
+  strictRateLimiter,
   requireRoles("SHOP_OWNER"),
+  validate(ChangePinSchema),
   changeShopOwnerPin
 );
 
 router.post(
   "/me/request-email-otp",
   auth,
+  otpResendRateLimiter,
   requireRoles("SHOP_OWNER"),
   requestShopOwnerEmailOtp
 );
@@ -123,6 +138,7 @@ router.post(
   "/",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  validate(CreateShopOwnerSchema),
   createShopOwner
 );
 
@@ -131,6 +147,7 @@ router.put(
   "/:id/activate",
   auth,
   requireRoles("MASTER_ADMIN"),
+  validateObjectId("id"),
   toggleShopOwnerActive
 );
 
@@ -146,6 +163,7 @@ router.get(
   "/:id",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  validateObjectId("id"),
   getShopOwner
 );
 
@@ -153,6 +171,8 @@ router.put(
   "/:id",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  validateObjectId("id"),
+  validate(UpdateShopOwnerSchema),
   updateShopOwner
 );
 
@@ -160,6 +180,7 @@ router.delete(
   "/:id",
   auth,
   requireRoles("MASTER_ADMIN", "MANAGER", "SUPERVISOR", "STAFF"),
+  validateObjectId("id"),
   deleteShopOwner
 );
 

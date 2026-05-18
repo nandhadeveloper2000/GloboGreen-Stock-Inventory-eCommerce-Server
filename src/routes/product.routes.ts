@@ -2,6 +2,9 @@ import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { productMediaUpload } from "../middlewares/upload";
 import { requireRoles } from "../middlewares/rbac.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
+import { validate } from "../middlewares/validate";
+import { CreateProductSchema } from "../schemas";
 import {
   listProducts,
   getProductById,
@@ -36,11 +39,11 @@ const APPROVAL_ROLES = ["MASTER_ADMIN", "MANAGER"] as const;
 
 router.get("/", auth, requireRoles(...VIEW_ROLES), listProducts);
 router.get("/pending-approvals", auth, requireRoles(...APPROVAL_ROLES), listPendingApprovals);
-router.get("/:id", auth, requireRoles(...VIEW_ROLES), getProductById);
-router.post("/", auth, requireRoles(...CREATE_ROLES), productUpload, createProduct);
-router.put("/:id", auth, requireRoles(...UPDATE_ROLES), productUpload, updateProduct);
-router.delete("/:id", auth, requireRoles(...DELETE_ROLES), deleteProduct);
-router.patch("/:id/approve", auth, requireRoles(...APPROVAL_ROLES), approveProduct);
-router.patch("/:id/reject", auth, requireRoles(...APPROVAL_ROLES), rejectProduct);
+router.get("/:id", auth, requireRoles(...VIEW_ROLES), validateObjectId("id"), getProductById);
+router.post("/", auth, requireRoles(...CREATE_ROLES), productUpload, validate(CreateProductSchema), createProduct);
+router.put("/:id", auth, requireRoles(...UPDATE_ROLES), validateObjectId("id"), productUpload, updateProduct);
+router.delete("/:id", auth, requireRoles(...DELETE_ROLES), validateObjectId("id"), deleteProduct);
+router.patch("/:id/approve", auth, requireRoles(...APPROVAL_ROLES), validateObjectId("id"), approveProduct);
+router.patch("/:id/reject", auth, requireRoles(...APPROVAL_ROLES), validateObjectId("id"), rejectProduct);
 
 export default router;

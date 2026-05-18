@@ -1660,18 +1660,19 @@ export async function forgotShopStaffPin(req: Request, res: Response) {
       });
     }
 
+    // Don't reveal account status — silently skip inactive accounts
     if ((staff as any).isActive === false) {
-      return res.status(403).json({
-        success: false,
-        message: "Staff account deactivated",
+      return res.json({
+        success: true,
+        message: "If the account exists, a PIN reset OTP has been sent",
       });
     }
 
     const state = await validateShopStaffAccountState(staff);
     if (!state.ok) {
-      return res.status(state.status).json({
-        success: false,
-        message: state.message,
+      return res.json({
+        success: true,
+        message: "If the account exists, a PIN reset OTP has been sent",
       });
     }
 

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth";
 import { requireRoles } from "../middlewares/rbac.middleware";
+import { validateObjectId } from "../middlewares/validateObjectId";
 import {
   listPriceLists,
   createPriceList,
@@ -16,9 +17,9 @@ const MANAGE_ROLES = ["MASTER_ADMIN", "MANAGER", "SUPERVISOR", "SHOP_OWNER", "SH
 const DELETE_ROLES = ["MASTER_ADMIN", "MANAGER", "SHOP_OWNER"] as const;
 
 router.get("/", auth, requireRoles(...VIEW_ROLES), listPriceLists);
-router.get("/:id", auth, requireRoles(...VIEW_ROLES), getPriceListById);
+router.get("/:id", auth, requireRoles(...VIEW_ROLES), validateObjectId("id"), getPriceListById);
 router.post("/", auth, requireRoles(...MANAGE_ROLES), createPriceList);
-router.put("/:id", auth, requireRoles(...MANAGE_ROLES), updatePriceList);
-router.delete("/:id", auth, requireRoles(...DELETE_ROLES), deletePriceList);
+router.put("/:id", auth, requireRoles(...MANAGE_ROLES), validateObjectId("id"), updatePriceList);
+router.delete("/:id", auth, requireRoles(...DELETE_ROLES), validateObjectId("id"), deletePriceList);
 
 export default router;

@@ -425,15 +425,33 @@ export async function createShop(req: Request, res: Response) {
       });
     }
 
-    const file = req.file as Express.Multer.File | undefined;
+    const files = req.files as
+      | Record<string, Express.Multer.File[]>
+      | undefined;
+    const file =
+      files?.frontImage?.[0] || (req.file as Express.Multer.File | undefined);
+    const gstFile = files?.gstCertificate?.[0] as Express.Multer.File | undefined;
+    const udyamFile = files?.udyamCertificate?.[0] as
+      | Express.Multer.File
+      | undefined;
 
     let frontImageUrl = "";
     let frontImagePublicId = "";
+    let gstCertificate = {};
+    let udyamCertificate = {};
 
     if (file) {
       const up = await uploadToCloud(file, CLOUD_FOLDER_SHOP_FRONT);
       frontImageUrl = up.url;
       frontImagePublicId = up.publicId;
+    }
+
+    if (gstFile) {
+      gstCertificate = await uploadDocument(gstFile, CLOUD_FOLDER_SHOP_DOCS);
+    }
+
+    if (udyamFile) {
+      udyamCertificate = await uploadDocument(udyamFile, CLOUD_FOLDER_SHOP_DOCS);
     }
 
     const shop = await ShopModel.create({
@@ -449,6 +467,8 @@ export async function createShop(req: Request, res: Response) {
       shopAddress: normalizeAddress(req.body),
       frontImageUrl,
       frontImagePublicId,
+      gstCertificate,
+      udyamCertificate,
       isActive: toBool((req.body as any).isActive) ?? true,
     });
 

@@ -358,17 +358,11 @@ export async function masterForgotPin(req: AuthRequest, res: Response) {
       });
     }
 
-    if (!master.isActive) {
-      return res.status(403).json({
-        success: false,
-        message: "Account disabled",
-      });
-    }
-
-    if (!master.email) {
-      return res.status(400).json({
-        success: false,
-        message: "No email found for this account",
+    // Don't reveal account status or email absence — return same generic response
+    if (!master.isActive || !master.email) {
+      return res.json({
+        success: true,
+        message: "If the account exists, a PIN reset OTP has been sent",
       });
     }
 
