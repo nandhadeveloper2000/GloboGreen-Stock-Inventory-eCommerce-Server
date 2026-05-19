@@ -49,10 +49,10 @@ export function requireShopAccess(paramName = "shopId") {
       if (role === "SHOP_OWNER") {
         const shop = await ShopModel.findOne({
           _id: shopId,
-          ownerId: userId,
+          shopOwnerAccountId: userId,
           isDeleted: { $ne: true },
         })
-          .select("_id")
+          .select("_id shopOwnerAccountId")
           .lean();
 
         if (!shop) {

@@ -120,10 +120,18 @@ type DynamicUnitValue = {
   unit?: unknown;
 };
 
+type DynamicVariationMatrixStatus =
+  | "AVAILABLE"
+  | "OUT_OF_STOCK"
+  | "INACTIVE";
+
 type DynamicVariationMatrixRow = {
   comboKey?: unknown;
   dimensions?: Record<string, unknown>;
   values?: Record<string, unknown>;
+  mainImage?: unknown;
+  status?: unknown;
+  details?: unknown;
 };
 
 type DynamicProductFieldValueEntry = {
@@ -155,6 +163,8 @@ type DynamicFieldFileUploadMeta = {
   key?: string;
   uploadField?: string;
   itemIndex?: number;
+  matrixComboKey?: string;
+  matrixFileKey?: string;
 };
 
 type ProductTypeFieldDefinition = {
@@ -198,6 +208,67 @@ type ProductTypeFieldBuilderSection = {
 
 function norm(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function normalizeExternalSourcePlatform(value: unknown) {
+  const normalized = norm(value);
+
+  if (!normalized) {
+    return "";
+  }
+
+  const key = normalized.toLowerCase();
+  const platformMap: Record<string, string> = {
+    amazon: "AMAZON",
+    flipkart: "FLIPKART",
+    "spare website": "SPARE_WEBSITE",
+    spare_website: "SPARE_WEBSITE",
+    "all spares": "ALL_SPARES",
+    all_spares: "ALL_SPARES",
+  };
+
+  return platformMap[key] || normalized.toUpperCase().replace(/\s+/g, "_");
+}
+
+function normalizeExternalProductIdType(value: unknown) {
+  return norm(value).toUpperCase().replace(/\s+/g, "_");
+}
+
+function buildExternalSourcePayload(input: {
+  externalSource?: unknown;
+  externalSourceUrl?: unknown;
+  externalSourceType?: unknown;
+  externalProductId?: unknown;
+  externalProductIdType?: unknown;
+}) {
+  const externalSource =
+    input.externalSource && typeof input.externalSource === "object"
+      ? (input.externalSource as Record<string, unknown>)
+      : {};
+
+  const sourceUrl = norm(
+    externalSource.sourceUrl ?? input.externalSourceUrl ?? ""
+  );
+  const platform = normalizeExternalSourcePlatform(
+    externalSource.platform ?? input.externalSourceType ?? ""
+  );
+  const externalProductId = norm(
+    externalSource.externalProductId ?? input.externalProductId ?? ""
+  );
+  const externalProductIdType = normalizeExternalProductIdType(
+    externalSource.externalProductIdType ?? input.externalProductIdType ?? ""
+  );
+
+  if (!sourceUrl && !platform && !externalProductId && !externalProductIdType) {
+    return undefined;
+  }
+
+  return {
+    platform,
+    externalProductIdType,
+    externalProductId,
+    sourceUrl,
+  };
 }
 
 function normalizeText(value: unknown) {
@@ -541,6 +612,22 @@ function normalizeDynamicFieldPrimitive(value: unknown) {
   return null;
 }
 
+function normalizeDynamicVariationMatrixStatus(
+  value: unknown
+): DynamicVariationMatrixStatus | null {
+  const normalized = norm(value).toUpperCase();
+
+  if (
+    normalized === "AVAILABLE" ||
+    normalized === "OUT_OF_STOCK" ||
+    normalized === "INACTIVE"
+  ) {
+    return normalized as DynamicVariationMatrixStatus;
+  }
+
+  return null;
+}
+
 function isDynamicUnitValue(value: unknown): value is DynamicUnitValue {
   return Boolean(
     value &&
@@ -622,10 +709,18 @@ function normalizeDynamicVariationMatrixRow(value: unknown) {
     {}
   );
 
+  const mainImage = normalizeDynamicFileValue(candidate.mainImage);
+  const status =
+    normalizeDynamicVariationMatrixStatus(candidate.status) || "AVAILABLE";
+  const details = norm(candidate.details);
+
   return {
     comboKey,
     dimensions,
     values,
+    ...(mainImage ? { mainImage } : {}),
+    status,
+    ...(details ? { details } : {}),
   };
 }
 
@@ -906,6 +1001,8 @@ function parseDynamicFieldFileUploadMeta(
         Number.isInteger(Number(item?.itemIndex)) && Number(item?.itemIndex) >= 0
           ? Number(item?.itemIndex)
           : undefined,
+      matrixComboKey: norm(item?.matrixComboKey),
+      matrixFileKey: norm(item?.matrixFileKey),
     }))
     .filter((item) => item.uploadField && (item.fieldId || item.key));
 }
@@ -936,6 +1033,39 @@ async function attachDynamicFieldFileUploads(params: {
       fileName: file.originalname,
       mimeType: file.mimetype,
     };
+
+    if (meta.matrixComboKey && meta.matrixFileKey) {
+      const current = getDynamicFieldLookupValue(params.lookup, {
+        fieldId: meta.fieldId,
+        key: meta.key,
+      });
+      const nextRows = Array.isArray(current?.value) ? [...current.value] : [];
+      const targetIndex = nextRows.findIndex((row) => {
+        const normalizedRow = normalizeDynamicVariationMatrixRow(row);
+        return normalizedRow?.comboKey === meta.matrixComboKey;
+      });
+
+      if (targetIndex >= 0) {
+        const currentRow = normalizeDynamicVariationMatrixRow(nextRows[targetIndex]);
+
+        if (currentRow) {
+          nextRows[targetIndex] = {
+            ...currentRow,
+            [meta.matrixFileKey]: nextFileValue,
+          };
+
+          setDynamicFieldLookupValue(params.lookup, {
+            fieldId: meta.fieldId,
+            key: meta.key,
+            entry: {
+              value: nextRows,
+            },
+          });
+        }
+      }
+
+      continue;
+    }
 
     if (meta.itemIndex !== undefined) {
       const current = getDynamicFieldLookupValue(params.lookup, {
@@ -1417,6 +1547,19 @@ async function validateAndNormalizeDynamicFields(
           return null;
         }
 
+        if (row.status && !normalizeDynamicVariationMatrixStatus(row.status)) {
+          res.status(400).json({
+            success: false,
+            message: "Variation row status is invalid",
+          });
+          return null;
+        }
+
+        const normalizedStatus =
+          normalizeDynamicVariationMatrixStatus(row.status) || "AVAILABLE";
+        const normalizedDetails = norm(row.details);
+        const normalizedMainImage = normalizeDynamicFileValue(row.mainImage);
+
         const normalizedDimensions = Object.entries(
           row.dimensions || {}
         ).reduce<Record<string, unknown>>((acc, [rawKey, rawValue]) => {
@@ -1547,6 +1690,9 @@ async function validateAndNormalizeDynamicFields(
           comboKey,
           dimensions: normalizedDimensions,
           values: normalizedRowValues,
+          ...(normalizedMainImage ? { mainImage: normalizedMainImage } : {}),
+          status: normalizedStatus,
+          ...(normalizedDetails ? { details: normalizedDetails } : {}),
         });
       }
 
@@ -2077,6 +2223,13 @@ function buildCreatePayload(body: any, user: any) {
     parseJsonField<DynamicProductFieldValues>(body?.dynamicFieldValues, [])
   );
   const dynamicFields = normalizeDynamicFields(body?.dynamicFields);
+  const externalSource = buildExternalSourcePayload({
+    externalSource: body?.externalSource,
+    externalSourceUrl: body?.externalSourceUrl,
+    externalSourceType: body?.externalSourceType,
+    externalProductId: body?.externalProductId,
+    externalProductIdType: body?.externalProductIdType,
+  });
 
   const configurationMode = normalizeConfigurationMode(body?.configurationMode);
 
@@ -2084,6 +2237,16 @@ function buildCreatePayload(body: any, user: any) {
     itemName: norm(body?.itemName),
     sku: norm(body?.sku).toUpperCase(),
     description: norm(body?.description),
+    externalSourceUrl: externalSource?.sourceUrl || norm(body?.externalSourceUrl),
+    externalSourceType:
+      externalSource?.platform ||
+      normalizeExternalSourcePlatform(body?.externalSourceType),
+    externalProductId:
+      externalSource?.externalProductId || norm(body?.externalProductId),
+    externalProductIdType:
+      externalSource?.externalProductIdType ||
+      normalizeExternalProductIdType(body?.externalProductIdType),
+    externalSource,
 
     searchKeys: normalizeArray<string>(searchKeys)
       .map((item) => normalizeText(item))
@@ -2123,6 +2286,12 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
   const payload: Record<string, unknown> = {
     ...updatedByFromUser(user),
   };
+  const externalSourceFieldsProvided =
+    body?.externalSource !== undefined ||
+    body?.externalSourceUrl !== undefined ||
+    body?.externalSourceType !== undefined ||
+    body?.externalProductId !== undefined ||
+    body?.externalProductIdType !== undefined;
 
   const existingConfigurationMode = normalizeConfigurationMode(
     existing?.configurationMode,
@@ -2139,6 +2308,46 @@ function buildUpdatePayload(body: any, user: any, existing: any) {
 
   if (body?.description !== undefined) {
     payload.description = norm(body.description);
+  }
+
+  if (body?.externalSourceUrl !== undefined) {
+    payload.externalSourceUrl = norm(body.externalSourceUrl);
+  }
+
+  if (body?.externalProductId !== undefined) {
+    payload.externalProductId = norm(body.externalProductId);
+  }
+
+  if (body?.externalProductIdType !== undefined) {
+    payload.externalProductIdType = normalizeExternalProductIdType(
+      body.externalProductIdType
+    );
+  }
+
+  if (body?.externalSourceType !== undefined) {
+    payload.externalSourceType = normalizeExternalSourcePlatform(
+      body.externalSourceType
+    );
+  }
+
+  if (externalSourceFieldsProvided) {
+    const externalSource = buildExternalSourcePayload({
+      externalSource: body?.externalSource ?? existing?.externalSource,
+      externalSourceUrl:
+        body?.externalSourceUrl ?? existing?.externalSourceUrl ?? "",
+      externalSourceType:
+        body?.externalSourceType ?? existing?.externalSourceType ?? "",
+      externalProductId:
+        body?.externalProductId ?? existing?.externalProductId ?? "",
+      externalProductIdType:
+        body?.externalProductIdType ?? existing?.externalProductIdType ?? "",
+    });
+
+    payload.externalSource = externalSource;
+    payload.externalSourceUrl = externalSource?.sourceUrl || "";
+    payload.externalSourceType = externalSource?.platform || "";
+    payload.externalProductId = externalSource?.externalProductId || "";
+    payload.externalProductIdType = externalSource?.externalProductIdType || "";
   }
 
   if (body?.searchKeys !== undefined) {

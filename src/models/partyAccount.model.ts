@@ -1,7 +1,15 @@
 import { Schema, model, models, type InferSchemaType, type Model } from "mongoose";
 
-export const PARTY_TYPE = ["VENDOR", "CUSTOMER", "OTHER"] as const;
+export const PARTY_TYPE = [
+  "SUPPLIER",
+  "DEALER",
+  "WHOLESALER",
+  "CUSTOMER",
+  "VENDOR",
+  "OTHER",
+] as const;
 export const PAYMENT_MODE = ["CASH", "UPI", "CARD", "BANK_TRANSFER", "CHEQUE", "CREDIT"] as const;
+const BALANCE_TYPE = ["DR", "CR", "RECEIVABLE", "PAYABLE", "NONE"] as const;
 
 const PartyAccountSchema = new Schema(
   {
@@ -47,6 +55,26 @@ const PartyAccountSchema = new Schema(
       trim: true,
     },
 
+    email: {
+      type: String,
+      default: "",
+      trim: true,
+      lowercase: true,
+    },
+
+    gstNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+    },
+
+    gstState: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     openingBalance: {
       type: Number,
       default: 0,
@@ -54,7 +82,7 @@ const PartyAccountSchema = new Schema(
 
     openingBalanceType: {
       type: String,
-      enum: ["DR", "CR"],
+      enum: BALANCE_TYPE,
       default: "DR",
     },
 
@@ -65,8 +93,13 @@ const PartyAccountSchema = new Schema(
 
     balanceType: {
       type: String,
-      enum: ["DR", "CR"],
+      enum: BALANCE_TYPE,
       default: "DR",
+    },
+
+    creditLimit: {
+      type: Number,
+      default: 0,
     },
 
     notes: {

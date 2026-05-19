@@ -25,6 +25,7 @@ const SHOP_STAFF_ROLES: Role[] = [
 
 const SHOP_PRODUCT_ALLOWED_SHOP_TYPES = [
   "WAREHOUSE_RETAIL_SHOP",
+  "RETAIL_BRANCH_SHOP",
   "WHOLESALE_SHOP",
 ] as const;
 
@@ -83,7 +84,8 @@ function validatePricingTypeForShop(
     return {
       ok: false as const,
       pricingType,
-      message: "Warehouse Retail Shop products can use only single product pricing.",
+      message:
+        "Only wholesale shop supports bulk pricing. Main and branch shops use single pricing.",
     };
   }
 
@@ -220,7 +222,7 @@ async function ensureShopProductManageAccess(req: Request, shopId: string) {
     return { ok: false as const, status: 403, message: "Shop is deactivated" };
   }
 
-  const shopType = normalizeUpper((shop as any).shopType);
+  const shopType = normalizeShopType((shop as any).shopType);
 
   if (
     !SHOP_PRODUCT_ALLOWED_SHOP_TYPES.includes(
@@ -230,7 +232,8 @@ async function ensureShopProductManageAccess(req: Request, shopId: string) {
     return {
       ok: false as const,
       status: 403,
-      message: "Only Warehouse Retail Shop or Wholesale Shop can manage shop products",
+      message:
+        "Only Main Shop, Branch Shop, or Wholesale Shop can manage shop products",
     };
   }
 
@@ -657,6 +660,78 @@ function populateShopProductQuery(query: any) {
     .populate("brandId", "_id name image")
     .populate("modelId", "_id name image brandId")
     .populate("vendorId", vendorPopulateSelect);
+}
+
+export async function listPublicStoreProducts(req: Request, res: Response) {
+  try {
+    const shopId = String(req.params.shopId || "");
+
+    if (!isObjectId(shopId)) {
+      return res.status(400).json({ success: false, message: "Invalid shopId" });
+    }
+
+    const shop = await ShopModel.findOne({ _id: shopId, isActive: true })
+      .select("name shopType billingType gstNumber")
+      .lean();
+
+    if (!shop) {
+      return res.status(404).json({ success: false, message: "Shop not found" });
+    }
+
+    const page  = Math.max(1, Number(req.query.page  || 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 24)));
+    const skip  = (page - 1) * limit;
+
+    const filter: any = { shopId, isActive: true, qty: { $gt: 0 } };
+
+    if (req.query.categoryId   && isObjectId(req.query.categoryId))   filter.categoryId   = req.query.categoryId;
+    if (req.query.subcategoryId && isObjectId(req.query.subcategoryId)) filter.subcategoryId = req.query.subcategoryId;
+    if (req.query.brandId      && isObjectId(req.query.brandId))      filter.brandId      = req.query.brandId;
+
+    if (req.query.search) {
+      const q = String(req.query.search).trim();
+      if (q) filter.itemName = { $regex: q, $options: "i" };
+    }
+
+    const [docs, total] = await Promise.all([
+      populateShopProductQuery(
+        ShopProductModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)
+      ),
+      ShopProductModel.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: docs,
+      meta: { page, limit, total, pages: Math.ceil(total / limit) },
+      shop: { _id: shop._id, name: shop.name, shopType: shop.shopType },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load products";
+    return res.status(500).json({ success: false, message });
+  }
+}
+
+export async function getPublicStoreProduct(req: Request, res: Response) {
+  try {
+    const shopId = String(req.params.shopId || "");
+    const id     = String(req.params.id     || "");
+
+    if (!isObjectId(shopId) || !isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+
+    const doc = await populateShopProductQuery(
+      ShopProductModel.findOne({ _id: id, shopId, isActive: true })
+    );
+
+    if (!doc) return res.status(404).json({ success: false, message: "Product not found" });
+
+    return res.status(200).json({ success: true, data: doc });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load product";
+    return res.status(500).json({ success: false, message });
+  }
 }
 
 export async function addProductToShop(req: Request, res: Response) {

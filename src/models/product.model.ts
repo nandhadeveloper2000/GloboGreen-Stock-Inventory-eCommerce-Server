@@ -102,6 +102,20 @@ function normalizeDynamicPrimitiveValue(value: unknown) {
   return null;
 }
 
+function normalizeDynamicVariationMatrixStatus(value: unknown) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+
+  if (
+    normalized === "AVAILABLE" ||
+    normalized === "OUT_OF_STOCK" ||
+    normalized === "INACTIVE"
+  ) {
+    return normalized;
+  }
+
+  return null;
+}
+
 function normalizeDynamicFileValue(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -207,10 +221,24 @@ function normalizeDynamicVariationMatrixRow(value: unknown) {
     return acc;
   }, {});
 
+  const mainImage = normalizeDynamicFileValue(
+    (candidate as { mainImage?: unknown }).mainImage
+  );
+  const status =
+    normalizeDynamicVariationMatrixStatus(
+      (candidate as { status?: unknown }).status
+    ) || "AVAILABLE";
+  const details = String(
+    (candidate as { details?: unknown }).details ?? ""
+  ).trim();
+
   return {
     comboKey,
     dimensions,
     values,
+    ...(mainImage ? { mainImage } : {}),
+    status,
+    ...(details ? { details } : {}),
   };
 }
 
@@ -509,6 +537,32 @@ const ProductInformationSectionSchema = new Schema(
   { _id: false }
 );
 
+const ExternalSourceSchema = new Schema(
+  {
+    platform: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    externalProductIdType: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    externalProductId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    sourceUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+  },
+  { _id: false }
+);
+
 /* ---------------- PRODUCT COMPATIBILITY ---------------- */
 const CompatibilityGroupSchema = new Schema(
   {
@@ -566,6 +620,30 @@ const VariantItemSchema = new Schema(
     },
 
     description: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    externalSourceUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    externalSourceType: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    externalProductId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    externalProductIdType: {
       type: String,
       trim: true,
       default: "",
@@ -693,6 +771,35 @@ const ProductSchema = new Schema(
       type: String,
       trim: true,
       default: "",
+    },
+
+    externalSourceUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    externalSourceType: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    externalProductId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    externalProductIdType: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    externalSource: {
+      type: ExternalSourceSchema,
+      default: undefined,
     },
 
     configurationMode: {
@@ -853,6 +960,13 @@ type ProductInformationSectionInput = {
   fields?: ProductInformationFieldInput[];
 };
 
+type ExternalSourceInput = {
+  platform?: string;
+  externalProductIdType?: string;
+  externalProductId?: string;
+  sourceUrl?: string;
+};
+
 type CompatibilityGroupInput = {
   brandId?: unknown;
   modelId?: unknown[];
@@ -919,6 +1033,11 @@ type MutableProductDocument = Omit<
 > & {
   productTypeId?: unknown;
   configurationMode?: string;
+  externalSourceUrl?: string;
+  externalSourceType?: string;
+  externalProductId?: string;
+  externalProductIdType?: string;
+  externalSource?: ExternalSourceInput;
   searchKeys?: string[];
   brandId?: unknown;
   modelId?: unknown;
@@ -975,6 +1094,37 @@ ProductSchema.pre("validate", function () {
 
   if (typeof doc.description === "string") {
     doc.description = doc.description.trim();
+  }
+
+  if (typeof doc.externalSourceUrl === "string") {
+    doc.externalSourceUrl = doc.externalSourceUrl.trim();
+  }
+
+  if (typeof doc.externalSourceType === "string") {
+    doc.externalSourceType = doc.externalSourceType.trim();
+  }
+
+  if (typeof doc.externalProductId === "string") {
+    doc.externalProductId = doc.externalProductId.trim();
+  }
+
+  if (typeof doc.externalProductIdType === "string") {
+    doc.externalProductIdType = doc.externalProductIdType.trim();
+  }
+
+  if (doc.externalSource && typeof doc.externalSource === "object") {
+    doc.externalSource.platform = String(
+      doc.externalSource.platform || ""
+    ).trim();
+    doc.externalSource.externalProductIdType = String(
+      doc.externalSource.externalProductIdType || ""
+    ).trim();
+    doc.externalSource.externalProductId = String(
+      doc.externalSource.externalProductId || ""
+    ).trim();
+    doc.externalSource.sourceUrl = String(
+      doc.externalSource.sourceUrl || ""
+    ).trim();
   }
 
   doc.productTypeId = doc.productTypeId || undefined;

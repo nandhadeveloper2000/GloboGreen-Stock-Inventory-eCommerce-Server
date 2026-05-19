@@ -7,6 +7,8 @@ import {
   listShopProducts,
   updateProductToShop,
   deactivateShopProduct,
+  listPublicStoreProducts,
+  getPublicStoreProduct,
 } from "../controllers/shopProduct.controller";
 
 const router = Router();
@@ -42,6 +44,10 @@ const DELETE_ROLES = [
   "SHOP_OWNER",
   "SHOP_MANAGER",
 ] as const;
+
+/* Public store endpoints — no auth required */
+router.get("/:shopId/store/products", listPublicStoreProducts);
+router.get("/:shopId/store/products/:id", getPublicStoreProduct);
 
 router.get(
   "/:shopId/available-products",

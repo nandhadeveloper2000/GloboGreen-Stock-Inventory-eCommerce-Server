@@ -106,7 +106,7 @@ export async function getMasterPurchaseReport(req: AuthedRequest, res: Response)
 
     const matchStage: Record<string, unknown> = { isActive: true };
     if (from || to) {
-      matchStage.createdAt = {
+      matchStage.purchaseDate = {
         ...(from ? { $gte: startOfDay(from) } : {}),
         ...(to ? { $lte: endOfDay(to) } : {}),
       };
@@ -117,7 +117,11 @@ export async function getMasterPurchaseReport(req: AuthedRequest, res: Response)
         { $match: matchStage },
         {
           $group: {
-            _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" }, day: { $dayOfMonth: "$createdAt" } },
+            _id: {
+              year: { $year: "$purchaseDate" },
+              month: { $month: "$purchaseDate" },
+              day: { $dayOfMonth: "$purchaseDate" },
+            },
             totalAmount: { $sum: "$grandTotal" },
             orders: { $sum: 1 },
           },
@@ -131,7 +135,15 @@ export async function getMasterPurchaseReport(req: AuthedRequest, res: Response)
         { $limit: 10 },
         { $lookup: { from: "vendors", localField: "_id", foreignField: "_id", as: "vendor" } },
         { $unwind: { path: "$vendor", preserveNullAndEmptyArrays: true } },
-        { $project: { vendorName: { $ifNull: ["$vendor.name", "Unknown"] }, totalAmount: 1, orders: 1 } },
+        {
+          $project: {
+            vendorName: {
+              $ifNull: ["$vendor.vendorName", { $ifNull: ["$vendor.name", "Unknown"] }],
+            },
+            totalAmount: 1,
+            orders: 1,
+          },
+        },
       ]),
       PurchaseOrderModel.aggregate([
         { $match: matchStage },
@@ -285,7 +297,7 @@ export async function getShopPurchaseReport(req: AuthedRequest, res: Response) {
       isActive: true,
     };
     if (from || to) {
-      matchStage.createdAt = {
+      matchStage.purchaseDate = {
         ...(from ? { $gte: startOfDay(from) } : {}),
         ...(to ? { $lte: endOfDay(to) } : {}),
       };
@@ -296,7 +308,11 @@ export async function getShopPurchaseReport(req: AuthedRequest, res: Response) {
         { $match: matchStage },
         {
           $group: {
-            _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" }, day: { $dayOfMonth: "$createdAt" } },
+            _id: {
+              year: { $year: "$purchaseDate" },
+              month: { $month: "$purchaseDate" },
+              day: { $dayOfMonth: "$purchaseDate" },
+            },
             totalAmount: { $sum: "$grandTotal" },
             orders: { $sum: 1 },
           },
@@ -310,7 +326,15 @@ export async function getShopPurchaseReport(req: AuthedRequest, res: Response) {
         { $limit: 10 },
         { $lookup: { from: "vendors", localField: "_id", foreignField: "_id", as: "vendor" } },
         { $unwind: { path: "$vendor", preserveNullAndEmptyArrays: true } },
-        { $project: { vendorName: { $ifNull: ["$vendor.name", "Unknown"] }, totalAmount: 1, orders: 1 } },
+        {
+          $project: {
+            vendorName: {
+              $ifNull: ["$vendor.vendorName", { $ifNull: ["$vendor.name", "Unknown"] }],
+            },
+            totalAmount: 1,
+            orders: 1,
+          },
+        },
       ]),
       PurchaseOrderModel.aggregate([
         { $match: matchStage },

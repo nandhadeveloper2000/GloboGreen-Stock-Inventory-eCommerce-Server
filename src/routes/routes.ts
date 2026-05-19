@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import authRoutes from "./auth.routes";
+import publicStoreRoutes from "./publicStore.routes";
 import masterRoutes from "./master.routes";
 import staffRoutes from "./staff.routes";
 import shopownersRoutes from "./shopowner.routes";
@@ -14,6 +15,7 @@ import modelRoutes from "./model.routes";
 import productTypeRoutes from "./productType.routes";
 import productTypeFieldBuilderRoutes from "./productTypeFieldBuilder.routes";
 import ProductCompatibilityRoutes from "./productCompatibility.routes";
+import externalProductRoutes from "./externalProduct.routes";
 import proudctRoutes from "./product.routes";
 import shopCategoryMapRoutes from "./shopCategoryMap.routes";
 import shopSubCategoryMapRoutes from "./shopSubCategoryMap.routes";
@@ -45,6 +47,9 @@ import dashboardRoutes from "./dashboard.routes";
 
 const router = Router();
 
+/* ---------------- PUBLIC STORE (no auth) ---------------- */
+router.use("/public", publicStoreRoutes);
+
 /* ---------------- SHARED AUTH ---------------- */
 router.use("/auth", authRoutes);
 
@@ -66,6 +71,7 @@ router.use("/models", modelRoutes);
 router.use("/product-types", productTypeRoutes);
 router.use("/product-type-fields", productTypeFieldBuilderRoutes);
 router.use("/productcompatibility", ProductCompatibilityRoutes);
+router.use("/external-products", externalProductRoutes);
 router.use("/product", proudctRoutes);
 router.use("/shop-category-maps", shopCategoryMapRoutes);
 router.use("/shop-sub-category-maps", shopSubCategoryMapRoutes);

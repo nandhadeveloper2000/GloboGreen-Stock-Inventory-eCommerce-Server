@@ -17,6 +17,10 @@ function norm(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function upper(value: unknown) {
+  return norm(value).toUpperCase();
+}
+
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -58,6 +62,41 @@ function buildCreatedBy(req: AuthedRequest) {
   return { id: new mongoose.Types.ObjectId(userId), role: role || "UNKNOWN" };
 }
 
+function toFiniteNumber(value: unknown, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizeBalanceType(value: unknown) {
+  const normalized = upper(value);
+
+  if (normalized === "PAYABLE" || normalized === "CR") return "PAYABLE";
+  if (normalized === "NONE") return "NONE";
+
+  return "RECEIVABLE";
+}
+
+function normalizePartyType(value: unknown) {
+  const normalized = upper(value);
+  const allowedTypes = new Set([
+    "SUPPLIER",
+    "DEALER",
+    "WHOLESALER",
+    "CUSTOMER",
+    "VENDOR",
+    "OTHER",
+  ]);
+
+  return allowedTypes.has(normalized) ? normalized : "";
+}
+
+function withPartyNameAlias<T extends { name?: string }>(row: T) {
+  return {
+    ...row,
+    partyName: row.name || "",
+  };
+}
+
 export async function listPartyAccounts(req: AuthedRequest, res: Response) {
   try {
     const shopOwnerAccountId = resolveShopOwnerAccountId(req);
@@ -80,11 +119,18 @@ export async function listPartyAccounts(req: AuthedRequest, res: Response) {
       isActive: true,
     };
 
-    if (partyType && partyType !== "ALL") filter.partyType = partyType;
+    if (partyType && partyType !== "ALL") filter.partyType = normalizePartyType(partyType) || partyType;
 
     if (q) {
       const regex = new RegExp(escapeRegex(q), "i");
-      filter.$or = [{ name: regex }, { mobile: regex }, { notes: regex }];
+      filter.$or = [
+        { name: regex },
+        { mobile: regex },
+        { email: regex },
+        { gstNumber: regex },
+        { gstState: regex },
+        { notes: regex },
+      ];
     }
 
     const rows = await PartyAccountModel.find(filter).sort({ name: 1, createdAt: -1 }).lean();
@@ -93,7 +139,7 @@ export async function listPartyAccounts(req: AuthedRequest, res: Response) {
       success: true,
       message: "Party accounts loaded",
       count: rows.length,
-      data: rows,
+      data: rows.map((row) => withPartyNameAlias(row)),
     });
   } catch (error) {
     console.error("LIST_PARTY_ACCOUNTS_ERROR:", error);
@@ -115,17 +161,23 @@ export async function createPartyAccount(req: AuthedRequest, res: Response) {
       return res.status(400).json({ success: false, message: "Valid shopId required" });
     }
 
-    const name = norm(body.name);
+    const name = norm(body.name || body.partyName);
     if (!name) return res.status(400).json({ success: false, message: "Party name required" });
 
-    const partyType = norm(body.partyType).toUpperCase();
-    const allowedTypes = ["VENDOR", "CUSTOMER", "OTHER"];
-    if (!allowedTypes.includes(partyType)) {
-      return res.status(400).json({ success: false, message: "Invalid partyType. Use VENDOR, CUSTOMER, or OTHER" });
+    const partyType = normalizePartyType(body.partyType);
+    if (!partyType) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid partyType. Use SUPPLIER, DEALER, WHOLESALER, CUSTOMER, VENDOR, or OTHER",
+      });
     }
 
-    const openingBalance = Number(body.openingBalance ?? 0);
-    const openingBalanceType = norm(body.openingBalanceType) || "DR";
+    const openingBalance = toFiniteNumber(body.openingBalance, 0);
+    const creditLimit = toFiniteNumber(body.creditLimit, 0);
+    const openingBalanceType = normalizeBalanceType(
+      body.openingBalanceType ?? body.balanceType
+    );
 
     const createdBy = buildCreatedBy(req);
 
@@ -135,10 +187,14 @@ export async function createPartyAccount(req: AuthedRequest, res: Response) {
       partyType,
       name,
       mobile: norm(body.mobile),
-      openingBalance: Number.isFinite(openingBalance) ? openingBalance : 0,
-      openingBalanceType: openingBalanceType === "CR" ? "CR" : "DR",
-      currentBalance: Number.isFinite(openingBalance) ? openingBalance : 0,
-      balanceType: openingBalanceType === "CR" ? "CR" : "DR",
+      email: norm(body.email).toLowerCase(),
+      gstNumber: upper(body.gstNumber),
+      gstState: norm(body.gstState),
+      openingBalance,
+      openingBalanceType,
+      currentBalance: openingBalance,
+      balanceType: openingBalanceType,
+      creditLimit,
       notes: norm(body.notes),
       refId: body.refId && isValidId(norm(body.refId)) ? new mongoose.Types.ObjectId(norm(body.refId)) : null,
       refModel: norm(body.refModel) || null,
@@ -146,7 +202,11 @@ export async function createPartyAccount(req: AuthedRequest, res: Response) {
       isActive: true,
     });
 
-    return res.status(201).json({ success: true, message: "Party account created", data: doc });
+    return res.status(201).json({
+      success: true,
+      message: "Party account created",
+      data: withPartyNameAlias(doc.toObject()),
+    });
   } catch (error) {
     console.error("CREATE_PARTY_ACCOUNT_ERROR:", error);
     return res.status(500).json({ success: false, message: "Failed to create party account" });
@@ -181,11 +241,38 @@ export async function updatePartyAccount(req: AuthedRequest, res: Response) {
     const body = getSafeBody(req);
     const allowed: Record<string, unknown> = {};
 
-    if (body.name !== undefined) allowed.name = norm(body.name);
+    if (body.name !== undefined || body.partyName !== undefined) {
+      allowed.name = norm(body.name || body.partyName);
+    }
+    if (body.partyType !== undefined) {
+      const partyType = normalizePartyType(body.partyType);
+      if (!partyType) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid partyType supplied" });
+      }
+      allowed.partyType = partyType;
+    }
     if (body.mobile !== undefined) allowed.mobile = norm(body.mobile);
+    if (body.email !== undefined) allowed.email = norm(body.email).toLowerCase();
+    if (body.gstNumber !== undefined) allowed.gstNumber = upper(body.gstNumber);
+    if (body.gstState !== undefined) allowed.gstState = norm(body.gstState);
     if (body.notes !== undefined) allowed.notes = norm(body.notes);
-    if (body.openingBalance !== undefined) allowed.openingBalance = Number(body.openingBalance ?? 0);
-    if (body.openingBalanceType !== undefined) allowed.openingBalanceType = norm(body.openingBalanceType) === "CR" ? "CR" : "DR";
+    if (body.openingBalance !== undefined) {
+      const openingBalance = toFiniteNumber(body.openingBalance, 0);
+      allowed.openingBalance = openingBalance;
+      allowed.currentBalance = openingBalance;
+    }
+    if (body.creditLimit !== undefined) {
+      allowed.creditLimit = toFiniteNumber(body.creditLimit, 0);
+    }
+    if (body.openingBalanceType !== undefined || body.balanceType !== undefined) {
+      const balanceType = normalizeBalanceType(
+        body.openingBalanceType ?? body.balanceType
+      );
+      allowed.openingBalanceType = balanceType;
+      allowed.balanceType = balanceType;
+    }
 
     const doc = await PartyAccountModel.findByIdAndUpdate(
       new mongoose.Types.ObjectId(id),
@@ -195,7 +282,11 @@ export async function updatePartyAccount(req: AuthedRequest, res: Response) {
 
     if (!doc) return res.status(404).json({ success: false, message: "Party account not found" });
 
-    return res.status(200).json({ success: true, message: "Party account updated", data: doc });
+    return res.status(200).json({
+      success: true,
+      message: "Party account updated",
+      data: withPartyNameAlias(doc),
+    });
   } catch (error) {
     console.error("UPDATE_PARTY_ACCOUNT_ERROR:", error);
     return res.status(500).json({ success: false, message: "Failed to update party account" });
