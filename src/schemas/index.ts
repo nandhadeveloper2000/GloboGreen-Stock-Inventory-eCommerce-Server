@@ -132,15 +132,6 @@ export const CreateProductSchema = z.object({
   hsnCode: z.string().trim().optional(),
 });
 
-export const ExternalProductGoogleSearchSchema = z.object({
-  keyword: z.string().trim().min(1, "Keyword is required").max(200),
-  category: z.string().trim().min(1, "Category is required").max(100),
-});
-
-export const ExternalProductSourceDetailsSchema = z.object({
-  sourceUrl: z.string().trim().url("Valid source URL is required"),
-});
-
 // ─── Purchase ─────────────────────────────────────────────────────────────────
 
 export const PurchaseItemSchema = z.object({
