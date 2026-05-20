@@ -272,3 +272,14 @@ export const CreateModelSchema = z.object({
   shopId: zObjectId.optional(),
   description: z.string().trim().optional(),
 });
+
+// ─── External Product ─────────────────────────────────────────────────────────
+
+export const ExternalProductGoogleSearchSchema = z.object({
+  keyword: zNonEmptyString,
+  category: z.string().trim().optional().default(""),
+});
+
+export const ExternalProductSourceDetailsSchema = z.object({
+  sourceUrl: z.string().trim().min(1, "sourceUrl is required"),
+});
